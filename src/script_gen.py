@@ -1,10 +1,10 @@
 """Buat naskah + prompt gambar orisinal dengan Gemini API (free tier)."""
 import json
 import os
+import re
 import requests
 
-MODEL = os.environ.get("GEMINI_MODEL", "gemini-2.5-flash")
-URL = "https://generativelanguage.googleapis.com/v1beta/models/{m}:generateContent"
+BASE = "https://generativelanguage.googleapis.com/v1beta"
 
 PROMPT = """Kamu penulis konten video pendek (YouTube Shorts) dalam {language}.
 Topik yang sedang ramai di negara {country}: "{topic}" (kata kunci: {tags}).
@@ -26,8 +26,35 @@ Balas HANYA JSON dengan bentuk:
 }}
 Jumlah scenes: tepat {n}. Total narasi sekitar 40-50 detik bila dibaca."""
 
+SKIP = ("image", "tts", "live", "audio", "lite", "exp", "embedding", "robotics")
+
+
+def pick_model(key: str) -> str:
+    forced = os.environ.get("GEMINI_MODEL")
+    if forced:
+        return forced
+    r = requests.get(f"{BASE}/models", params={"key": key, "pageSize": 200}, timeout=30)
+    if r.status_code != 200:
+        raise RuntimeError(f"ListModels gagal {r.status_code}: {r.text[:300]}")
+    names = [
+        m["name"].split("/")[-1]
+        for m in r.json().get("models", [])
+        if "generateContent" in m.get("supportedGenerationMethods", [])
+    ]
+    cands = [n for n in names if "flash" in n and not any(s in n for s in SKIP)]
+    if not cands:
+        raise RuntimeError(f"Tidak ada model flash yang cocok. Tersedia: {names[:20]}")
+
+    def ver(n: str):
+        return [float(x) for x in re.findall(r"\d+(?:\.\d+)?", n)]
+
+    return max(cands, key=ver)
+
 
 def generate(topic: dict, cfg: dict) -> dict:
+    key = os.environ["GEMINI_API_KEY"]
+    model = pick_model(key)
+    print("Model Gemini:", model)
     prompt = PROMPT.format(
         language=cfg["language"],
         country=cfg["country"],
@@ -36,15 +63,16 @@ def generate(topic: dict, cfg: dict) -> dict:
         n=cfg["scenes"],
     )
     r = requests.post(
-        URL.format(m=MODEL),
-        params={"key": os.environ["GEMINI_API_KEY"]},
+        f"{BASE}/models/{model}:generateContent",
+        params={"key": key},
         json={
             "contents": [{"parts": [{"text": prompt}]}],
             "generationConfig": {"responseMimeType": "application/json"},
         },
         timeout=90,
     )
-    r.raise_for_status()
+    if r.status_code != 200:
+        raise RuntimeError(f"Gemini {model} gagal {r.status_code}: {r.text[:400]}")
     text = r.json()["candidates"][0]["content"]["parts"][0]["text"]
     data = json.loads(text)
     assert data.get("scenes"), "Gemini tidak mengembalikan scenes"
