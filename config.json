@@ -1,0 +1,12 @@
+{
+  "country": "ID",
+  "language": "Bahasa Indonesia",
+  "timezone": "Asia/Jakarta",
+  "peak_hours": [12, 19, 21],
+  "max_posts_per_day": 3,
+  "scenes": 6,
+  "width": 1080,
+  "height": 1920,
+  "voice": "id-ID-ArdiNeural",
+  "privacy": "private"
+}
