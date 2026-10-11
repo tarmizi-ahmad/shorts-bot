@@ -3,10 +3,10 @@ import os
 import requests
 
 API = "https://www.googleapis.com/youtube/v3/videos"
+SKIP_CATEGORIES = {"10"}  # 10 = Music
 
 
-def get_trends(country: str, limit: int = 15) -> list[dict]:
-    key = os.environ["YOUTUBE_API_KEY"]
+def get_trends(country: str, limit: int = 50) -> list[dict]:
     r = requests.get(
         API,
         params={
@@ -14,7 +14,7 @@ def get_trends(country: str, limit: int = 15) -> list[dict]:
             "chart": "mostPopular",
             "regionCode": country,
             "maxResults": limit,
-            "key": key,
+            "key": os.environ["YOUTUBE_API_KEY"],
         },
         timeout=30,
     )
@@ -22,6 +22,11 @@ def get_trends(country: str, limit: int = 15) -> list[dict]:
     out = []
     for item in r.json().get("items", []):
         sn = item["snippet"]
+        if sn.get("categoryId") in SKIP_CATEGORIES:
+            continue
+        lang = (sn.get("defaultAudioLanguage") or sn.get("defaultLanguage") or "en").lower()
+        if country == "US" and not lang.startswith("en"):
+            continue
         out.append(
             {
                 "id": item["id"],

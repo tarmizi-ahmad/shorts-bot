@@ -2,6 +2,7 @@
 import json
 import os
 import re
+import time
 import requests
 
 BASE = "https://generativelanguage.googleapis.com/v1beta"
@@ -27,6 +28,8 @@ Balas HANYA JSON dengan bentuk:
 Jumlah scenes: tepat {n}. Total narasi sekitar 40-50 detik bila dibaca."""
 
 SKIP = ("image", "tts", "live", "audio", "lite", "exp", "embedding", "robotics")
+RETRY_STATUS = (429, 500, 502, 503, 504)
+WAITS = [20, 60, 120]  # detik jeda antar percobaan
 
 
 def pick_model(key: str) -> str:
@@ -54,7 +57,8 @@ def pick_model(key: str) -> str:
 def generate(topic: dict, cfg: dict) -> dict:
     key = os.environ["GEMINI_API_KEY"]
     model = pick_model(key)
-    print("Model Gemini:", model)
+    print("Model Gemini:", model, flush=True)
+
     prompt = PROMPT.format(
         language=cfg["language"],
         country=cfg["country"],
@@ -62,17 +66,34 @@ def generate(topic: dict, cfg: dict) -> dict:
         tags=", ".join(topic.get("tags", [])),
         n=cfg["scenes"],
     )
-    r = requests.post(
-        f"{BASE}/models/{model}:generateContent",
-        params={"key": key},
-        json={
-            "contents": [{"parts": [{"text": prompt}]}],
-            "generationConfig": {"responseMimeType": "application/json"},
-        },
-        timeout=90,
-    )
-    if r.status_code != 200:
-        raise RuntimeError(f"Gemini {model} gagal {r.status_code}: {r.text[:400]}")
+    body = {
+        "contents": [{"parts": [{"text": prompt}]}],
+        "generationConfig": {"responseMimeType": "application/json"},
+    }
+
+    last = None
+    for wait in [0] + WAITS:
+        if wait:
+            print(f"Gemini gagal ({last}). Coba lagi {wait} detik...", flush=True)
+            time.sleep(wait)
+        try:
+            r = requests.post(
+                f"{BASE}/models/{model}:generateContent",
+                params={"key": key},
+                json=body,
+                timeout=180,
+            )
+        except requests.RequestException as e:
+            last = type(e).__name__
+            continue
+        if r.status_code == 200:
+            break
+        last = f"HTTP {r.status_code}"
+        if r.status_code not in RETRY_STATUS:
+            raise RuntimeError(f"Gemini {model} gagal {r.status_code}: {r.text[:400]}")
+    else:
+        raise RuntimeError(f"Gemini gagal setelah retry: {last}")
+
     text = r.json()["candidates"][0]["content"]["parts"][0]["text"]
     data = json.loads(text)
     assert data.get("scenes"), "Gemini tidak mengembalikan scenes"
