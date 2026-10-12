@@ -3,7 +3,7 @@ import os
 import requests
 
 API = "https://www.googleapis.com/youtube/v3/videos"
-SKIP_CATEGORIES = {"10"}  # 10 = Music
+SKIP_CATEGORIES = {"10", "1"}  # 10 = Music, 1 = Film & Animation
 
 
 def get_trends(country: str, limit: int = 50) -> list[dict]:
