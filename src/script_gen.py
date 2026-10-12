@@ -1,12 +1,14 @@
 """Buat naskah + prompt gambar orisinal dengan Gemini API (free tier)."""
 import json
 import os
+import re
 import time
 import requests
 
 LIST_URL = "https://generativelanguage.googleapis.com/v1beta/models"
 GEN_URL = "https://generativelanguage.googleapis.com/v1beta/models/{m}:generateContent"
-SKIP = ("image", "tts", "live", "audio", "lite", "exp", "embedding", "robotics")
+SKIP = ("image", "tts", "live", "audio", "lite", "exp", "embedding", "robotics",
+        "omni", "preview", "thinking", "customtools")
 WAITS = [20, 60, 120]
 RETRY_STATUS = (429, 500, 502, 503, 504)
 
@@ -48,10 +50,10 @@ Balas HANYA JSON dengan bentuk:
 Jumlah scenes: tepat {n}. Total narasi sekitar 40-50 detik bila dibaca."""
 
 
-def pick_model(key: str) -> str:
+def list_models(key: str) -> list[str]:
     forced = os.environ.get("GEMINI_MODEL")
     if forced:
-        return forced
+        return [forced]
     r = requests.get(LIST_URL, params={"key": key, "pageSize": 200}, timeout=30)
     r.raise_for_status()
     names = []
@@ -64,13 +66,16 @@ def pick_model(key: str) -> str:
         names.append(name)
     if not names:
         raise RuntimeError("Tidak ada model flash yang cocok")
-    return sorted(names)[-1]
+
+    def ver(n: str) -> float:
+        m = re.search(r"(\d+(?:\.\d+)?)", n)
+        return float(m.group(1)) if m else 0.0
+
+    return sorted(names, key=ver, reverse=True)[:3]
 
 
 def generate(topic: dict, cfg: dict) -> dict:
     key = os.environ["GEMINI_API_KEY"]
-    model = pick_model(key)
-    print("Model Gemini:", model)
     prompt = PROMPT.format(
         language=cfg["language"],
         country=cfg["country"],
@@ -84,23 +89,26 @@ def generate(topic: dict, cfg: dict) -> dict:
         "contents": [{"parts": [{"text": prompt}]}],
         "generationConfig": {"responseMimeType": "application/json"},
     }
-    for wait in [0] + WAITS:
-        if wait:
-            print(f"Gemini sibuk, tunggu {wait}s...")
-            time.sleep(wait)
-        try:
-            r = requests.post(GEN_URL.format(m=model), params={"key": key}, json=body, timeout=180)
-        except requests.exceptions.RequestException as e:
-            print("Gemini error jaringan:", e)
-            continue
-        if r.status_code in RETRY_STATUS:
-            print("Gemini status", r.status_code)
-            continue
-        r.raise_for_status()
-        break
-    else:
-        raise RuntimeError("Gemini gagal setelah retry")
-    text = r.json()["candidates"][0]["content"]["parts"][0]["text"]
-    data = json.loads(text)
-    assert data.get("scenes"), "Gemini tidak mengembalikan scenes"
-    return data
+    for model in list_models(key):
+        print("Model Gemini:", model)
+        for wait in [0, 20, 60]:
+            if wait:
+                print(f"Gemini sibuk, tunggu {wait}s...")
+                time.sleep(wait)
+            try:
+                r = requests.post(GEN_URL.format(m=model), params={"key": key}, json=body, timeout=180)
+            except requests.exceptions.RequestException as e:
+                print("Gemini error jaringan:", e)
+                continue
+            if r.status_code in RETRY_STATUS:
+                print("Gemini status", r.status_code)
+                continue
+            if r.status_code == 404:
+                break
+            r.raise_for_status()
+            text = r.json()["candidates"][0]["content"]["parts"][0]["text"]
+            data = json.loads(text)
+            assert data.get("scenes"), "Gemini tidak mengembalikan scenes"
+            return data
+        print("Model", model, "gagal, coba model lain...")
+    raise RuntimeError("Gemini gagal di semua model")
