@@ -1,67 +1,81 @@
 """Buat naskah + prompt gambar orisinal dengan Gemini API (free tier)."""
 import json
 import os
-import re
 import time
 import requests
 
-BASE = "https://generativelanguage.googleapis.com/v1beta"
+LIST_URL = "https://generativelanguage.googleapis.com/v1beta/models"
+GEN_URL = "https://generativelanguage.googleapis.com/v1beta/models/{m}:generateContent"
+SKIP = ("image", "tts", "live", "audio", "lite", "exp", "embedding", "robotics")
+WAITS = [20, 60, 120]
+RETRY_STATUS = (429, 500, 502, 503, 504)
 
-PROMPT = """Kamu penulis konten video pendek (YouTube Shorts) dalam {language}.
-Topik yang sedang ramai di negara {country}: "{topic}" (kata kunci: {tags}).
+PROMPT = """Kamu penulis naskah YouTube Shorts dalam bahasa {language} untuk audiens {country}.
+Niche channel: {niche}
+Sudut pandang khas channel: {angle}
 
-Tulis konten ORISINAL. Jangan menyalin judul/kalimat dari sumber, jangan sebut
-nama channel, jangan pakai lirik, kutipan panjang, atau karakter berhak cipta.
-Gaya bahasa harus terasa natural untuk audiens {country}.
-Jangan membuat klaim fakta yang tidak pasti tentang orang nyata; kalau topik
-sensitif, bawakan secara netral.
+Topik yang sedang ramai: "{topic}" (kata kunci: {tags}).
+
+ATURAN ISI (penting untuk kualitas & orisinalitas):
+- Jangan menyalin judul/kalimat sumber, jangan sebut nama channel, jangan pakai lirik,
+  kutipan panjang, atau karakter berhak cipta.
+- Jangan membuat klaim fakta yang tidak pasti tentang orang nyata. Kalau tidak yakin,
+  pakai kata seperti "reportedly" / "people are saying". Topik sensitif dibawakan netral.
+- Bukan sekadar menceritakan ulang. Wajib ada NILAI TAMBAH: konteks singkat yang
+  jarang disebut, kenapa ini penting bagi penonton, dan satu pendapat/prediksi
+  yang jelas (bertanda opini).
+- Jika topik tidak cocok dengan niche (mis. musik, selebriti gosip), cari sudut
+  yang cocok dengan niche, atau tetap bawakan lewat sudut pandang channel.
+
+STRUKTUR NASKAH (ikuti urutan scenes):
+1. Scene 1 = HOOK, maksimal 12 kata, memancing rasa penasaran dalam 2 detik
+   (pertanyaan mengejutkan / klaim berani yang benar / kontras). Jangan mulai dengan
+   "Hi", "Hello", atau perkenalan.
+2. Scene tengah = fakta inti + konteks + "kenapa ini penting".
+3. Scene terakhir = opini/prediksi singkat + ajakan komentar berupa pertanyaan
+   (mis. "Do you agree?"), maks 1 kalimat. Jangan minta subscribe berlebihan.
+- Kalimat pendek, ritme cepat, tanpa basa-basi.
 
 Balas HANYA JSON dengan bentuk:
 {{
-  "title": "judul menarik maks 70 karakter",
+  "title": "judul menarik maks 70 karakter, memuat kata kunci topik",
   "description": "deskripsi 2 kalimat + 3 hashtag",
   "tags": ["tag1", "tag2", "tag3"],
   "scenes": [
-    {{"narration": "1-2 kalimat narasi singkat", "image_prompt": "deskripsi gambar ilustrasi gaya komik/kartun, tanpa teks, tanpa tokoh terkenal, bahasa Inggris"}}
+    {{"narration": "1-2 kalimat narasi singkat dalam {language}", "image_prompt": "deskripsi gambar ilustrasi gaya komik/kartun, tanpa teks, tanpa tokoh terkenal, bahasa Inggris"}}
   ]
 }}
 Jumlah scenes: tepat {n}. Total narasi sekitar 40-50 detik bila dibaca."""
-
-SKIP = ("image", "tts", "live", "audio", "lite", "exp", "embedding", "robotics")
-RETRY_STATUS = (429, 500, 502, 503, 504)
-WAITS = [20, 60, 120]  # detik jeda antar percobaan
 
 
 def pick_model(key: str) -> str:
     forced = os.environ.get("GEMINI_MODEL")
     if forced:
         return forced
-    r = requests.get(f"{BASE}/models", params={"key": key, "pageSize": 200}, timeout=30)
-    if r.status_code != 200:
-        raise RuntimeError(f"ListModels gagal {r.status_code}: {r.text[:300]}")
-    names = [
-        m["name"].split("/")[-1]
-        for m in r.json().get("models", [])
-        if "generateContent" in m.get("supportedGenerationMethods", [])
-    ]
-    cands = [n for n in names if "flash" in n and not any(s in n for s in SKIP)]
-    if not cands:
-        raise RuntimeError(f"Tidak ada model flash yang cocok. Tersedia: {names[:20]}")
-
-    def ver(n: str):
-        return [float(x) for x in re.findall(r"\d+(?:\.\d+)?", n)]
-
-    return max(cands, key=ver)
+    r = requests.get(LIST_URL, params={"key": key, "pageSize": 200}, timeout=30)
+    r.raise_for_status()
+    names = []
+    for m in r.json().get("models", []):
+        name = m["name"].split("/")[-1]
+        if "generateContent" not in m.get("supportedGenerationMethods", []):
+            continue
+        if "flash" not in name or any(s in name for s in SKIP):
+            continue
+        names.append(name)
+    if not names:
+        raise RuntimeError("Tidak ada model flash yang cocok")
+    return sorted(names)[-1]
 
 
 def generate(topic: dict, cfg: dict) -> dict:
     key = os.environ["GEMINI_API_KEY"]
     model = pick_model(key)
-    print("Model Gemini:", model, flush=True)
-
+    print("Model Gemini:", model)
     prompt = PROMPT.format(
         language=cfg["language"],
         country=cfg["country"],
+        niche=cfg.get("niche", "berita & tren harian dijelaskan singkat"),
+        angle=cfg.get("angle", "jelaskan kenapa ini penting dan apa yang mungkin terjadi berikutnya"),
         topic=topic["title"],
         tags=", ".join(topic.get("tags", [])),
         n=cfg["scenes"],
@@ -70,30 +84,22 @@ def generate(topic: dict, cfg: dict) -> dict:
         "contents": [{"parts": [{"text": prompt}]}],
         "generationConfig": {"responseMimeType": "application/json"},
     }
-
-    last = None
     for wait in [0] + WAITS:
         if wait:
-            print(f"Gemini gagal ({last}). Coba lagi {wait} detik...", flush=True)
+            print(f"Gemini sibuk, tunggu {wait}s...")
             time.sleep(wait)
         try:
-            r = requests.post(
-                f"{BASE}/models/{model}:generateContent",
-                params={"key": key},
-                json=body,
-                timeout=180,
-            )
-        except requests.RequestException as e:
-            last = type(e).__name__
+            r = requests.post(GEN_URL.format(m=model), params={"key": key}, json=body, timeout=180)
+        except requests.exceptions.RequestException as e:
+            print("Gemini error jaringan:", e)
             continue
-        if r.status_code == 200:
-            break
-        last = f"HTTP {r.status_code}"
-        if r.status_code not in RETRY_STATUS:
-            raise RuntimeError(f"Gemini {model} gagal {r.status_code}: {r.text[:400]}")
+        if r.status_code in RETRY_STATUS:
+            print("Gemini status", r.status_code)
+            continue
+        r.raise_for_status()
+        break
     else:
-        raise RuntimeError(f"Gemini gagal setelah retry: {last}")
-
+        raise RuntimeError("Gemini gagal setelah retry")
     text = r.json()["candidates"][0]["content"]["parts"][0]["text"]
     data = json.loads(text)
     assert data.get("scenes"), "Gemini tidak mengembalikan scenes"

@@ -45,7 +45,7 @@ def main() -> int:
         img, aud, clip = (os.path.join(out, f"s{i}.{e}") for e in ("png", "mp3", "mp4"))
         images.make_image(sc["image_prompt"], img, cfg["width"], cfg["height"])
         tts.make_voice(sc["narration"], cfg["voice"], aud)
-        video.make_clip(img, aud, clip, cfg["width"], cfg["height"])
+        video.make_clip(img, aud, clip, cfg["width"], cfg["height"], sc["narration"])
         clips.append(clip)
         print(f"Scene {i + 1}/{len(data['scenes'])} selesai")
 
