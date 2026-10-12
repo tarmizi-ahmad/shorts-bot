@@ -18,13 +18,23 @@ def _duration(path: str) -> float:
     return float(out)
 
 
-def _chunks(text: str, size: int = 3) -> list[str]:
-    words = text.split()
-    return [" ".join(words[i:i + size]) for i in range(0, len(words), size)]
+def _chunks(text: str, max_chars: int = 16, max_words: int = 3) -> list[str]:
+    """Potong kata jadi baris pendek: maks 16 huruf & 3 kata per tampilan."""
+    out, cur = [], []
+    for wd in text.split():
+        trial = " ".join(cur + [wd])
+        if cur and (len(trial) > max_chars or len(cur) >= max_words):
+            out.append(" ".join(cur))
+            cur = [wd]
+        else:
+            cur.append(wd)
+    if cur:
+        out.append(" ".join(cur))
+    return out
 
 
-def _subtitle_filters(text: str, dur: float, h: int, base: str) -> str:
-    """drawtext per potongan 3 kata, waktu sebanding panjang huruf."""
+def _subtitle_filters(text: str, dur: float, w: int, h: int, base: str) -> str:
+    """drawtext per potongan pendek, waktu sebanding panjang huruf."""
     parts = _chunks(text)
     if not parts:
         return ""
@@ -32,12 +42,14 @@ def _subtitle_filters(text: str, dur: float, h: int, base: str) -> str:
     t, filters = 0.0, []
     for i, p in enumerate(parts):
         d = dur * len(p) / total
+        # Huruf kapital DejaVu Bold ~0.8 x fontsize lebarnya; muat di 84% lebar video.
+        fs = int(min(76, (w * 0.84) / (0.8 * max(len(p), 1))))
         tf = f"{base}_sub{i}.txt"
         with open(tf, "w", encoding="utf-8") as f:
             f.write(p.upper())
         filters.append(
             f"drawtext=fontfile={FONT}:textfile={tf}:expansion=none:"
-            f"fontsize=84:fontcolor=white:borderw=8:bordercolor=black:"
+            f"fontsize={fs}:fontcolor=white:borderw=6:bordercolor=black:"
             f"x=(w-text_w)/2:y={int(h * 0.68)}:"
             f"enable='between(t,{t:.2f},{t + d:.2f})'"
         )
@@ -55,7 +67,7 @@ def make_clip(image: str, audio: str, out: str, w: int, h: int, text: str = "") 
         "format=yuv420p"
     )
     if text:
-        vf += _subtitle_filters(text, dur, h, os.path.splitext(out)[0])
+        vf += _subtitle_filters(text, dur, w, h, os.path.splitext(out)[0])
     _run(
         [
             "ffmpeg", "-y", "-loop", "1", "-i", image, "-i", audio,
