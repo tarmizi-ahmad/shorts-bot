@@ -6,8 +6,10 @@ import requests
 
 def _h():
     key = os.environ["SUPABASE_KEY"]
-    return {"apikey": key, "Authorization": f"Bearer {key}", "Content-Type": "application/json"}
-
+    h = {"apikey": key, "Content-Type": "application/json"}
+    if not key.startswith("sb_"):
+        h["Authorization"] = f"Bearer {key}"
+    return h
 
 def _url():
     return os.environ["SUPABASE_URL"].rstrip("/") + "/rest/v1/posts"
