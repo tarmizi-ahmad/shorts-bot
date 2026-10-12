@@ -1,11 +1,11 @@
-"""Pipeline: trending -> naskah -> gambar -> narasi -> video -> upload."""
+"""Pipeline: trending/history -> naskah -> gambar -> narasi -> video -> upload."""
 import datetime as dt
 import json
 import os
 import sys
 from zoneinfo import ZoneInfo
 
-from . import db, images, script_gen, trends, tts, upload_youtube, video
+from . import db, history, images, script_gen, trends, tts, upload_youtube, video
 
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 
@@ -30,7 +30,11 @@ def main() -> int:
         return 0
 
     used = db.used_topics(cfg["country"])
-    topic = next((t for t in trends.get_trends(cfg["country"]) if t["id"] not in used), None)
+    if cfg.get("source") == "history":
+        candidates = history.get_topics(tz)
+    else:
+        candidates = trends.get_trends(cfg["country"])
+    topic = next((t for t in candidates if t["id"] not in used), None)
     if not topic:
         print("Tidak ada topik baru.")
         return 0

@@ -16,13 +16,15 @@ PROMPT = """Kamu penulis naskah YouTube Shorts dalam bahasa {language} untuk aud
 Niche channel: {niche}
 Sudut pandang khas channel: {angle}
 
-Topik yang sedang ramai: "{topic}" (kata kunci: {tags}).
-
+Topik: "{topic}" (kata kunci: {tags}).
+{facts_block}{character_block}
 ATURAN ISI (penting untuk kualitas & orisinalitas):
 - Jangan menyalin judul/kalimat sumber, jangan sebut nama channel, jangan pakai lirik,
   kutipan panjang, atau karakter berhak cipta.
 - Jangan membuat klaim fakta yang tidak pasti tentang orang nyata. Kalau tidak yakin,
   pakai kata seperti "reportedly" / "people are saying". Topik sensitif dibawakan netral.
+- Jangan mengarang tanggal, angka, nama, atau kutipan. Pakai hanya yang ada di
+  DASAR FAKTA (bila ada) atau pengetahuan umum yang pasti benar.
 - Bukan sekadar menceritakan ulang. Wajib ada NILAI TAMBAH: konteks singkat yang
   jarang disebut, kenapa ini penting bagi penonton, dan satu pendapat/prediksi
   yang jelas (bertanda opini).
@@ -40,11 +42,11 @@ STRUKTUR NASKAH (ikuti urutan scenes):
 
 Balas HANYA JSON dengan bentuk:
 {{
-  "title": "judul menarik maks 70 karakter, memuat kata kunci topik",
+  "hook_title": "3-7 kata pemicu rasa penasaran, tanpa tahun, tanpa tanda kutip, tanpa titik dua",
   "description": "deskripsi 2 kalimat + 3 hashtag",
   "tags": ["tag1", "tag2", "tag3"],
   "scenes": [
-    {{"narration": "1-2 kalimat narasi singkat dalam {language}", "image_prompt": "deskripsi gambar ilustrasi gaya komik/kartun, tanpa teks, tanpa tokoh terkenal, bahasa Inggris"}}
+    {{"narration": "1-2 kalimat narasi singkat dalam {language}", "image_prompt": "maks 25 kata, bahasa Inggris, gaya komik/kartun, tanpa teks di gambar, {image_rule}"}}
   ]
 }}
 Jumlah scenes: tepat {n}. Total narasi sekitar 40-50 detik bila dibaca."""
@@ -74,8 +76,37 @@ def list_models(key: str) -> list[str]:
     return sorted(names, key=ver, reverse=True)[:3]
 
 
+SERIES = "Today in History"
+
+
+def make_title(hook: str, topic: dict) -> str:
+    """Pola seri: '<hook> | Today in History (Oct 12, 1492)', maks 85 karakter."""
+    hook = hook.strip().strip('"').rstrip(".!?:")
+    label = topic.get("date_label")
+    if not label:
+        return hook[:85]
+    tail = f" | {SERIES} ({label})"
+    room = 85 - len(tail)
+    if len(hook) > room:
+        hook = hook[:room].rsplit(" ", 1)[0]
+    return hook + tail
+
+
 def generate(topic: dict, cfg: dict) -> dict:
     key = os.environ["GEMINI_API_KEY"]
+    character = cfg.get("character", "").strip()
+    if character:
+        character_block = (
+            f"MASKOT TETAP channel: {character}\n"
+            "Setiap image_prompt harus menampilkan MASKOT ITU sebagai tokoh utama yang "
+            "melakukan sesuatu sesuai isi scene (aksi, ekspresi, latar). Cukup tulis "
+            "'the mascot', JANGAN mendeskripsikan ulang tampilannya. Tokoh sejarah/nyata "
+            "hanya boleh tampil sebagai siluet atau figur bergaya tanpa wajah detail.\n"
+        )
+        image_rule = "tulis 'the mascot' + aksi + latar; tanpa wajah orang nyata"
+    else:
+        character_block = ""
+        image_rule = "tanpa tokoh terkenal"
     prompt = PROMPT.format(
         language=cfg["language"],
         country=cfg["country"],
@@ -83,6 +114,9 @@ def generate(topic: dict, cfg: dict) -> dict:
         angle=cfg.get("angle", "jelaskan kenapa ini penting dan apa yang mungkin terjadi berikutnya"),
         topic=topic["title"],
         tags=", ".join(topic.get("tags", [])),
+        facts_block=(f'DASAR FAKTA (sumber utama): {topic["facts"]}\n' if topic.get("facts") else ""),
+        character_block=character_block,
+        image_rule=image_rule,
         n=cfg["scenes"],
     )
     body = {
@@ -109,6 +143,10 @@ def generate(topic: dict, cfg: dict) -> dict:
             text = r.json()["candidates"][0]["content"]["parts"][0]["text"]
             data = json.loads(text)
             assert data.get("scenes"), "Gemini tidak mengembalikan scenes"
+            data["title"] = make_title(data.get("hook_title") or data.get("title") or topic["title"], topic)
+            if character:
+                for sc in data["scenes"]:
+                    sc["image_prompt"] = f"{character}. {sc['image_prompt']}"
             return data
         print("Model", model, "gagal, coba model lain...")
     raise RuntimeError("Gemini gagal di semua model")
