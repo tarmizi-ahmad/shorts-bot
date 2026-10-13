@@ -1,4 +1,4 @@
-"""Buat naskah + prompt gambar orisinal dengan Gemini API (free tier)."""
+"""Buat naskah + prompt gambar orisinal. Gemini dulu, cadangan: Groq, Cloudflare."""
 import json
 import os
 import re
@@ -9,7 +9,6 @@ LIST_URL = "https://generativelanguage.googleapis.com/v1beta/models"
 GEN_URL = "https://generativelanguage.googleapis.com/v1beta/models/{m}:generateContent"
 SKIP = ("image", "tts", "live", "audio", "lite", "exp", "embedding", "robotics",
         "omni", "preview", "thinking", "customtools")
-WAITS = [20, 60, 120]
 RETRY_STATUS = (429, 500, 502, 503, 504)
 
 PROMPT = """Kamu penulis naskah YouTube Shorts dalam bahasa {language} untuk audiens {country}.
@@ -92,8 +91,113 @@ def make_title(hook: str, topic: dict) -> str:
     return hook + tail
 
 
+def _gemini(prompt: str):
+    key = os.environ.get("GEMINI_API_KEY")
+    if not key:
+        return None
+    body = {
+        "contents": [{"parts": [{"text": prompt}]}],
+        "generationConfig": {"responseMimeType": "application/json"},
+    }
+    try:
+        models = list_models(key)
+    except requests.exceptions.RequestException as e:
+        print("Gemini list model gagal:", e)
+        return None
+    for model in models:
+        print("Model Gemini:", model)
+        for wait in [0, 20]:
+            if wait:
+                print(f"Gemini sibuk, tunggu {wait}s...")
+                time.sleep(wait)
+            try:
+                r = requests.post(GEN_URL.format(m=model), params={"key": key}, json=body, timeout=120)
+            except requests.exceptions.RequestException as e:
+                print("Gemini error jaringan:", e)
+                continue
+            if r.status_code in RETRY_STATUS:
+                print("Gemini status", r.status_code)
+                continue
+            if r.status_code != 200:
+                print("Gemini status", r.status_code, r.text[:200])
+                break
+            try:
+                return r.json()["candidates"][0]["content"]["parts"][0]["text"]
+            except (KeyError, IndexError):
+                print("Gemini balasan kosong")
+                break
+    return None
+
+
+def _groq(prompt: str):
+    key = os.environ.get("GROQ_API_KEY")
+    if not key:
+        return None
+    model = os.environ.get("GROQ_MODEL", "llama-3.3-70b-versatile")
+    print("Cadangan: Groq", model)
+    for wait in [0, 15]:
+        if wait:
+            time.sleep(wait)
+        try:
+            r = requests.post(
+                "https://api.groq.com/openai/v1/chat/completions",
+                headers={"Authorization": f"Bearer {key}"},
+                json={
+                    "model": model,
+                    "messages": [{"role": "user", "content": prompt}],
+                    "response_format": {"type": "json_object"},
+                    "temperature": 0.7,
+                },
+                timeout=120,
+            )
+        except requests.exceptions.RequestException as e:
+            print("Groq error jaringan:", e)
+            continue
+        if r.status_code in RETRY_STATUS:
+            print("Groq status", r.status_code)
+            continue
+        if r.status_code != 200:
+            print("Groq status", r.status_code, r.text[:200])
+            return None
+        return r.json()["choices"][0]["message"]["content"]
+    return None
+
+
+def _cloudflare_text(prompt: str):
+    acc, tok = os.environ.get("CF_ACCOUNT_ID"), os.environ.get("CF_API_TOKEN")
+    if not acc or not tok:
+        return None
+    model = os.environ.get("CF_TEXT_MODEL", "@cf/meta/llama-3.3-70b-instruct-fp8-fast")
+    print("Cadangan: Cloudflare", model)
+    try:
+        r = requests.post(
+            f"https://api.cloudflare.com/client/v4/accounts/{acc}/ai/run/{model}",
+            headers={"Authorization": f"Bearer {tok}"},
+            json={"messages": [{"role": "user", "content": prompt}], "max_tokens": 2500},
+            timeout=180,
+        )
+    except requests.exceptions.RequestException as e:
+        print("Cloudflare error jaringan:", e)
+        return None
+    if r.status_code != 200:
+        print("Cloudflare status", r.status_code, r.text[:200])
+        return None
+    out = r.json().get("result", {}).get("response")
+    return json.dumps(out) if isinstance(out, (dict, list)) else out
+
+
+def _parse(text: str) -> dict:
+    text = (text or "").strip()
+    try:
+        return json.loads(text)
+    except json.JSONDecodeError:
+        m = re.search(r"\{.*\}", text, re.S)
+        if not m:
+            raise
+        return json.loads(m.group(0))
+
+
 def generate(topic: dict, cfg: dict) -> dict:
-    key = os.environ["GEMINI_API_KEY"]
     character = cfg.get("character", "").strip()
     if character:
         character_block = (
@@ -139,41 +243,31 @@ def generate(topic: dict, cfg: dict) -> dict:
         image_rule=image_rule,
         n=cfg["scenes"],
     )
-    body = {
-        "contents": [{"parts": [{"text": prompt}]}],
-        "generationConfig": {"responseMimeType": "application/json"},
-    }
-    for model in list_models(key):
-        print("Model Gemini:", model)
-        for wait in [0, 20, 60]:
-            if wait:
-                print(f"Gemini sibuk, tunggu {wait}s...")
-                time.sleep(wait)
-            try:
-                r = requests.post(GEN_URL.format(m=model), params={"key": key}, json=body, timeout=180)
-            except requests.exceptions.RequestException as e:
-                print("Gemini error jaringan:", e)
-                continue
-            if r.status_code in RETRY_STATUS:
-                print("Gemini status", r.status_code)
-                continue
-            if r.status_code == 404:
-                break
-            r.raise_for_status()
-            text = r.json()["candidates"][0]["content"]["parts"][0]["text"]
-            data = json.loads(text)
-            assert data.get("scenes"), "Gemini tidak mengembalikan scenes"
-            data["title"] = make_title(data.get("hook_title") or data.get("title") or topic["title"], topic)
-            if character:
-                outfit = (data.get("era_outfit") or "").strip()
-                setting = (data.get("era_setting") or "").strip()
-                prefix = character
-                if outfit:
-                    prefix += f", wearing {outfit}"
-                if setting:
-                    prefix += f". Era setting: {setting}"
-                for sc in data["scenes"]:
-                    sc["image_prompt"] = f"{prefix}. {sc['image_prompt']}"
-            return data
-        print("Model", model, "gagal, coba model lain...")
-    raise RuntimeError("Gemini gagal di semua model")
+
+    data = None
+    for provider in (_gemini, _groq, _cloudflare_text):
+        text = provider(prompt)
+        if not text:
+            continue
+        try:
+            data = _parse(text)
+            assert data.get("scenes"), "tanpa scenes"
+            break
+        except Exception as e:  # JSON rusak / tidak lengkap -> coba penyedia berikutnya
+            print(f"Balasan {provider.__name__} tidak valid:", e)
+            data = None
+    if not data:
+        raise RuntimeError("Semua penyedia AI teks gagal (Gemini, Groq, Cloudflare)")
+
+    data["title"] = make_title(data.get("hook_title") or data.get("title") or topic["title"], topic)
+    if character:
+        outfit = (data.get("era_outfit") or "").strip()
+        setting = (data.get("era_setting") or "").strip()
+        prefix = character
+        if outfit:
+            prefix += f", wearing {outfit}"
+        if setting:
+            prefix += f". Era setting: {setting}"
+        for sc in data["scenes"]:
+            sc["image_prompt"] = f"{prefix}. {sc['image_prompt']}"
+    return data
