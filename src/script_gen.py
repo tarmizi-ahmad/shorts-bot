@@ -17,7 +17,7 @@ Niche channel: {niche}
 Sudut pandang khas channel: {angle}
 
 Topik: "{topic}" (kata kunci: {tags}).
-{facts_block}{character_block}
+{facts_block}{character_block}{era_block}
 ATURAN ISI (penting untuk kualitas & orisinalitas):
 - Jangan menyalin judul/kalimat sumber, jangan sebut nama channel, jangan pakai lirik,
   kutipan panjang, atau karakter berhak cipta.
@@ -39,10 +39,10 @@ STRUKTUR NASKAH (ikuti urutan scenes):
 3. Scene terakhir = opini/prediksi singkat + ajakan komentar berupa pertanyaan
    (mis. "Do you agree?"), maks 1 kalimat. Jangan minta subscribe berlebihan.
 - Kalimat pendek, ritme cepat, tanpa basa-basi.
-
+{era_story}
 Balas HANYA JSON dengan bentuk:
 {{
-  "hook_title": "3-7 kata pemicu rasa penasaran, tanpa tahun, tanpa tanda kutip, tanpa titik dua",
+{era_fields}  "hook_title": "3-7 kata pemicu rasa penasaran, tanpa tahun, tanpa tanda kutip, tanpa titik dua",
   "description": "deskripsi 2 kalimat + 3 hashtag",
   "tags": ["tag1", "tag2", "tag3"],
   "scenes": [
@@ -76,11 +76,11 @@ def list_models(key: str) -> list[str]:
     return sorted(names, key=ver, reverse=True)[:3]
 
 
-SERIES = "Today in History"
+SERIES = "What Happened Today"
 
 
 def make_title(hook: str, topic: dict) -> str:
-    """Pola seri: '<hook> | Today in History (Oct 12, 1492)', maks 85 karakter."""
+    """Pola seri: '<hook> | What Happened Today (Oct 12, 1492)', maks 85 karakter."""
     hook = hook.strip().strip('"').rstrip(".!?:")
     label = topic.get("date_label")
     if not label:
@@ -100,14 +100,34 @@ def generate(topic: dict, cfg: dict) -> dict:
             f"MASKOT TETAP channel: {character}\n"
             "Setiap image_prompt harus menampilkan MASKOT ITU sebagai tokoh utama yang "
             "melakukan sesuatu sesuai isi scene (aksi, ekspresi, latar). Cukup tulis "
-            "'the mascot', JANGAN mendeskripsikan ulang tampilannya. Tokoh sejarah/nyata "
+            "'the mascot', JANGAN mendeskripsikan ulang tampilannya (pakaian era diatur lewat era_outfit). Tokoh sejarah/nyata "
             "hanya boleh tampil sebagai siluet atau figur bergaya tanpa wajah detail.\n"
         )
         image_rule = "tulis 'the mascot' + aksi + latar; tanpa wajah orang nyata"
     else:
         character_block = ""
         image_rule = "tanpa tokoh terkenal"
+    year = topic.get("year")
+    era_block, era_fields, era_story = "", "", ""
+    if year:
+        era_block = (
+            f"TAHUN KEJADIAN: {year}. Semua visual HARUS terasa seperti era dan lokasi kejadian itu: "
+            "maskot memakai pakaian khas era dan tempat tersebut, latar (bangunan, kendaraan, "
+            "teknologi, warna, suasana) mencerminkan era itu, bukan zaman modern.\n"
+        )
+        era_fields = (
+            '  "era_outfit": "pakaian maskot yang akurat untuk tahun & lokasi kejadian, bahasa Inggris, maks 15 kata",\n'
+            '  "era_setting": "suasana/latar era itu (arsitektur, kendaraan, teknologi, palet warna), bahasa Inggris, maks 20 kata",\n'
+        )
+        era_story = (
+            f"- Bawa penonton MERASAKAN suasana tahun {year}: di scene 2-3 sebut 1-2 detail "
+            "sensorik/keseharian era itu (suara, benda, teknologi, tren) yang PASTI benar. "
+            "Boleh memakai kalimat 'Imagine it's ...' untuk mengajak membayangkan.\n"
+        )
     prompt = PROMPT.format(
+        era_block=era_block,
+        era_fields=era_fields,
+        era_story=era_story,
         language=cfg["language"],
         country=cfg["country"],
         niche=cfg.get("niche", "berita & tren harian dijelaskan singkat"),
@@ -145,8 +165,15 @@ def generate(topic: dict, cfg: dict) -> dict:
             assert data.get("scenes"), "Gemini tidak mengembalikan scenes"
             data["title"] = make_title(data.get("hook_title") or data.get("title") or topic["title"], topic)
             if character:
+                outfit = (data.get("era_outfit") or "").strip()
+                setting = (data.get("era_setting") or "").strip()
+                prefix = character
+                if outfit:
+                    prefix += f", wearing {outfit}"
+                if setting:
+                    prefix += f". Era setting: {setting}"
                 for sc in data["scenes"]:
-                    sc["image_prompt"] = f"{character}. {sc['image_prompt']}"
+                    sc["image_prompt"] = f"{prefix}. {sc['image_prompt']}"
             return data
         print("Model", model, "gagal, coba model lain...")
     raise RuntimeError("Gemini gagal di semua model")

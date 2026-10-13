@@ -3,8 +3,8 @@
   "language": "English",
   "timezone": "America/New_York",
   "source": "history",
-  "niche": "Today in History: one famous event that happened on this date, explained in 45 seconds",
-  "angle": "start with a gripping hook about the event, give the key facts and what happened right after, explain why it still matters to Americans today, and end with a clear opinion and a question to the viewer",
+  "niche": "What Happened Today: one famous event that happened on this date in history, explained in 45 seconds",
+  "angle": "start with a gripping hook about the event, give the key facts and what happened right after, make the viewer feel the era, explain why it still matters to Americans today, and end with a clear opinion and a question to the viewer",
   "peak_hours": [12, 19],
   "max_posts_per_day": 2,
   "scenes": 6,
@@ -12,5 +12,5 @@
   "height": 1920,
   "voice": "en-US-AriaNeural",
   "privacy": "private",
-  "character": "Chrono, a cute round cartoon owl historian with big round gold glasses, a navy blue bowler hat, a teal scarf and a tiny brown satchel, flat vector comic style, bold outlines, warm colors"
+  "character": "Chrono, a cute round cartoon owl historian with big round gold glasses and a teal scarf, flat vector comic style, bold outlines"
 }

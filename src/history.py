@@ -39,6 +39,7 @@ def get_topics(tz, limit: int = 40) -> list[dict]:
             {
                 "id": f"otd-{year}-{text[:40]}",
                 "title": f"{today.strftime('%B')} {today.day}, {year}: {text}",
+                "year": year,
                 "date_label": f"{today.strftime('%b')} {today.day}, {year}",
                 "tags": keywords + ["today in history", "history"],
                 "facts": f"{text} {extract}"[:900],
