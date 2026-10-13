@@ -1,0 +1,39 @@
+name: llm-test
+
+on:
+  workflow_dispatch:
+    inputs:
+      model_repo:
+        description: "Repo model GGUF di Hugging Face"
+        default: "Qwen/Qwen2.5-3B-Instruct-GGUF"
+      model_file:
+        description: "Nama file GGUF"
+        default: "qwen2.5-3b-instruct-q4_k_m.gguf"
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: pip
+
+      - name: Install llama.cpp (wheel CPU) dan hf hub
+        run: |
+          pip install requests huggingface_hub
+          pip install llama-cpp-python --prefer-binary --extra-index-url https://abetlen.github.io/llama-cpp-python/whl/cpu
+
+      - uses: actions/cache@v4
+        with:
+          path: ~/.cache/huggingface
+          key: hf-${{ inputs.model_repo }}-${{ inputs.model_file }}
+
+      - name: Tes naskah model lokal
+        env:
+          MODEL_REPO: ${{ inputs.model_repo }}
+          MODEL_FILE: ${{ inputs.model_file }}
+        run: python -u -m tools.llm_test
