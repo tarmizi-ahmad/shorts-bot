@@ -122,7 +122,9 @@ def _gemini(prompt: str):
                 print("Gemini status", r.status_code, r.text[:200])
                 break
             try:
-                return r.json()["candidates"][0]["content"]["parts"][0]["text"]
+                text = r.json()["candidates"][0]["content"]["parts"][0]["text"]
+                print(f"Naskah dari: Gemini ({model})")
+                return text
             except (KeyError, IndexError):
                 print("Gemini balasan kosong")
                 break
@@ -159,6 +161,7 @@ def _groq(prompt: str):
         if r.status_code != 200:
             print("Groq status", r.status_code, r.text[:200])
             return None
+        print(f"Naskah dari: Groq ({model})")
         return r.json()["choices"][0]["message"]["content"]
     return None
 
@@ -183,6 +186,7 @@ def _cloudflare_text(prompt: str):
         print("Cloudflare status", r.status_code, r.text[:200])
         return None
     out = r.json().get("result", {}).get("response")
+    print(f"Naskah dari: Cloudflare ({model})")
     return json.dumps(out) if isinstance(out, (dict, list)) else out
 
 
