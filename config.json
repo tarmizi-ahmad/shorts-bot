@@ -3,14 +3,13 @@
   "language": "English",
   "timezone": "America/New_York",
   "source": "history",
-  "niche": "What Happened Today: one famous event that happened on this date in history, explained in 45 seconds",
-  "angle": "start with a gripping hook about the event, give the key facts and what happened right after, make the viewer feel the era, explain why it still matters to Americans today, and end with a clear opinion and a question to the viewer",
+  "niche": "Today in History: one famous event that happened on this date, explained in 45 seconds",
+  "angle": "start with a gripping hook about the event, give the key facts and what happened right after, explain why it still matters to Americans today, and end with a clear opinion and a question to the viewer",
   "peak_hours": [12, 19],
   "max_posts_per_day": 2,
   "scenes": 6,
   "width": 1080,
   "height": 1920,
   "voice": "en_US-ryan-high",
-  "privacy": "private",
-  "character": "Tick, a tiny cute round robot time traveler with a white-silver egg-shaped body, big glowing teal eyes, a small brass clock dial on its chest and a short antenna with an orange light, flat vector comic style, bold outlines"
+  "privacy": "private"
 }

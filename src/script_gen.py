@@ -1,4 +1,4 @@
-"""Buat naskah + prompt gambar orisinal. Gemini dulu, cadangan: Groq, Cloudflare."""
+"""Buat naskah + prompt gambar orisinal dengan Gemini API (free tier)."""
 import json
 import os
 import re
@@ -9,6 +9,7 @@ LIST_URL = "https://generativelanguage.googleapis.com/v1beta/models"
 GEN_URL = "https://generativelanguage.googleapis.com/v1beta/models/{m}:generateContent"
 SKIP = ("image", "tts", "live", "audio", "lite", "exp", "embedding", "robotics",
         "omni", "preview", "thinking", "customtools")
+WAITS = [20, 60, 120]
 RETRY_STATUS = (429, 500, 502, 503, 504)
 
 PROMPT = """Kamu penulis naskah YouTube Shorts dalam bahasa {language} untuk audiens {country}.
@@ -202,29 +203,22 @@ def _parse(text: str) -> dict:
 
 
 def generate(topic: dict, cfg: dict) -> dict:
-    character = cfg.get("character", "").strip()
-    if character:
-        character_block = (
-            f"MASKOT TETAP channel: {character}\n"
-            "Setiap image_prompt harus menampilkan MASKOT ITU sebagai tokoh utama yang "
-            "melakukan sesuatu sesuai isi scene (aksi, ekspresi, latar). Cukup tulis "
-            "'the mascot', JANGAN mendeskripsikan ulang tampilannya (pakaian era diatur lewat era_outfit). Tokoh sejarah/nyata "
-            "hanya boleh tampil sebagai siluet atau figur bergaya tanpa wajah detail.\n"
-        )
-        image_rule = "tulis 'the mascot' + aksi + latar; tanpa wajah orang nyata"
-    else:
-        character_block = ""
-        image_rule = "tanpa tokoh terkenal"
+    # Maskot Cal ditempel lewat video.py, jadi gambar AI hanya LATAR tanpa tokoh.
+    character_block = (
+        "Maskot channel (kalender kecil bernama Cal) ditempel di tengah-bawah layar oleh editor video. "
+        "Setiap image_prompt HANYA melukiskan LATAR/pemandangan: tempat, bangunan, benda, suasana. "
+        "JANGAN ada tokoh, wajah, atau kerumunan di depan; sisakan ruang kosong di tengah-bawah gambar. "
+        "Tokoh sejarah hanya boleh berupa siluet kecil di kejauhan.\n"
+    )
+    image_rule = "hanya latar era itu, tanpa tokoh/wajah, ruang kosong di tengah-bawah"
     year = topic.get("year")
     era_block, era_fields, era_story = "", "", ""
     if year:
         era_block = (
             f"TAHUN KEJADIAN: {year}. Semua visual HARUS terasa seperti era dan lokasi kejadian itu: "
-            "maskot memakai pakaian khas era dan tempat tersebut, latar (bangunan, kendaraan, "
-            "teknologi, warna, suasana) mencerminkan era itu, bukan zaman modern.\n"
+            "latar (bangunan, kendaraan, teknologi, warna, suasana) mencerminkan era itu, bukan zaman modern.\n"
         )
         era_fields = (
-            '  "era_outfit": "pakaian maskot yang akurat untuk tahun & lokasi kejadian, bahasa Inggris, maks 15 kata",\n'
             '  "era_setting": "suasana/latar era itu (arsitektur, kendaraan, teknologi, palet warna), bahasa Inggris, maks 20 kata",\n'
         )
         era_story = (
@@ -264,14 +258,12 @@ def generate(topic: dict, cfg: dict) -> dict:
         raise RuntimeError("Semua penyedia AI teks gagal (Gemini, Groq, Cloudflare)")
 
     data["title"] = make_title(data.get("hook_title") or data.get("title") or topic["title"], topic)
-    if character:
-        outfit = (data.get("era_outfit") or "").strip()
-        setting = (data.get("era_setting") or "").strip()
-        prefix = character
-        if outfit:
-            prefix += f", wearing {outfit}"
+    setting = (data.get("era_setting") or "").strip()
+    style = "flat vector comic style, bold outlines, wide shot, no people in foreground, empty space at lower center, no text"
+    for sc in data["scenes"]:
+        parts = [sc["image_prompt"]]
         if setting:
-            prefix += f". Era setting: {setting}"
-        for sc in data["scenes"]:
-            sc["image_prompt"] = f"{prefix}. {sc['image_prompt']}"
+            parts.append(f"Era setting: {setting}")
+        parts.append(style)
+        sc["image_prompt"] = ". ".join(parts)
     return data

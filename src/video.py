@@ -1,12 +1,19 @@
-"""Rangkai gambar + narasi + subtitle jadi video vertikal 9:16 dengan FFmpeg."""
+"""Rangkai latar + narasi + subtitle + maskot Cal jadi video vertikal 9:16 dengan FFmpeg."""
 import os
 import subprocess
 
+from . import mascot
+
 FONT = "/usr/share/fonts/truetype/dejavu/DejaVuSans-Bold.ttf"
+SUB_Y = 0.50   # posisi subtitle (di atas kepala Cal)
+BOB = 9        # amplitudo naik-turun Cal (px)
+BOB_PERIOD = 2.2
 
 
 def _run(cmd: list[str]) -> None:
-    subprocess.run(cmd, check=True, stdout=subprocess.DEVNULL, stderr=subprocess.PIPE)
+    r = subprocess.run(cmd, stdout=subprocess.DEVNULL, stderr=subprocess.PIPE, text=True)
+    if r.returncode != 0:
+        raise RuntimeError("FFmpeg gagal: " + r.stderr[-1500:])
 
 
 def _duration(path: str) -> float:
@@ -34,7 +41,7 @@ def _chunks(text: str, max_chars: int = 16, max_words: int = 3) -> list[str]:
 
 
 def _subtitle_filters(text: str, dur: float, w: int, h: int, base: str) -> str:
-    """drawtext per potongan pendek, waktu sebanding panjang huruf."""
+    """drawtext per potongan 3 kata, waktu sebanding panjang huruf."""
     parts = _chunks(text)
     if not parts:
         return ""
@@ -50,30 +57,71 @@ def _subtitle_filters(text: str, dur: float, w: int, h: int, base: str) -> str:
         filters.append(
             f"drawtext=fontfile={FONT}:textfile={tf}:expansion=none:"
             f"fontsize={fs}:fontcolor=white:borderw=6:bordercolor=black:"
-            f"x=(w-text_w)/2:y={int(h * 0.68)}:"
+            f"x=(w-text_w)/2:y={int(h * SUB_Y)}:"
             f"enable='between(t,{t:.2f},{t + d:.2f})'"
         )
         t += d
-    return "," + ",".join(filters)
+    return ",".join(filters)
 
 
-def make_clip(image: str, audio: str, out: str, w: int, h: int, text: str = "") -> None:
+def _year_filter(year, h: int) -> str:
+    try:
+        y = int(year)
+    except (TypeError, ValueError):
+        return ""
+    if y <= 0:
+        return ""
+    return (
+        f"drawtext=fontfile={FONT}:text='{y}':expansion=none:fontsize=150:"
+        f"fontcolor=0xFFD23C:borderw=9:bordercolor=black:"
+        f"x=(w-text_w)/2:y={int(h * 0.07)}"
+    )
+
+
+def make_clip(image: str, audio: str, out: str, w: int, h: int, text: str = "",
+              cal: dict | None = None, year=None) -> None:
+    """cal = hasil mascot.prepare(); bila None, klip tanpa maskot."""
     dur = _duration(audio)
-    # Zoom pelan (Ken Burns) selama durasi audio.
-    vf = (
-        f"scale={w*2}:{h*2}:force_original_aspect_ratio=increase,"
+    base = os.path.splitext(out)[0]
+    # Latar: zoom pelan (Ken Burns) selama durasi audio.
+    bg = (
+        f"[0:v]scale={w*2}:{h*2}:force_original_aspect_ratio=increase,"
         f"crop={w*2}:{h*2},"
         f"zoompan=z='min(zoom+0.0008,1.15)':d=1:s={w}x{h}:fps=30,"
         "format=yuv420p"
     )
-    if text:
-        vf += _subtitle_filters(text, dur, w, h, os.path.splitext(out)[0])
+    inputs = ["-loop", "1", "-framerate", "30", "-i", image]
+    graph, last = [], "bg"
+
+    if cal:
+        x0 = (w - cal["w"]) // 2
+        y0 = h - cal["h"] - 200  # sisakan ruang untuk tombol/judul Shorts di bawah
+        bob = f"{y0}+{BOB}*sin(2*PI*t/{BOB_PERIOD})"
+        speak = mascot.expr(mascot.speech_intervals(audio))
+        blink = mascot.expr(mascot.blink_intervals(dur))
+        for k in ("base", "mouth", "blink", "blinkmouth"):
+            inputs += ["-loop", "1", "-framerate", "30", "-i", cal[k]]
+        fx, fy = x0 + cal["face_x"], f"{bob}+{cal['face_y']}"
+        graph.append(bg + "[bg]")
+        graph.append(f"[bg][1:v]overlay=x={x0}:y='{bob}':format=auto[a]")
+        graph.append(f"[a][2:v]overlay=x={fx}:y='{fy}':enable='{speak}*(1-{blink})':format=auto[b]")
+        graph.append(f"[b][3:v]overlay=x={fx}:y='{fy}':enable='(1-{speak})*{blink}':format=auto[c]")
+        graph.append(f"[c][4:v]overlay=x={fx}:y='{fy}':enable='{speak}*{blink}':format=auto[d]")
+        last = "d"
+    else:
+        graph.append(bg + "[bg]")
+
+    tail = [f for f in (_year_filter(year, h), _subtitle_filters(text, dur, w, h, base)) if f]
+    tail.append("format=yuv420p")
+    graph.append(f"[{last}]" + ",".join(tail) + "[v]")
+
+    audio_idx = len(inputs) // 6  # tiap input video memakai 6 argumen (-loop 1 -framerate 30 -i f)
     _run(
-        [
-            "ffmpeg", "-y", "-loop", "1", "-i", image, "-i", audio,
-            "-vf", vf, "-c:v", "libx264", "-preset", "veryfast",
-            "-c:a", "aac", "-b:a", "128k", "-shortest", "-r", "30", out,
-        ]
+        ["ffmpeg", "-y", *inputs, "-i", audio,
+         "-filter_complex", ";".join(graph),
+         "-map", "[v]", "-map", f"{audio_idx}:a",
+         "-c:v", "libx264", "-preset", "veryfast", "-pix_fmt", "yuv420p",
+         "-c:a", "aac", "-b:a", "128k", "-t", f"{dur:.3f}", "-r", "30", out]
     )
 
 

@@ -1,11 +1,11 @@
-"""Pipeline: trending/history -> naskah -> gambar -> narasi -> video -> upload."""
+"""Pipeline: trending -> naskah -> gambar -> narasi -> video -> upload."""
 import datetime as dt
 import json
 import os
 import sys
 from zoneinfo import ZoneInfo
 
-from . import db, history, images, script_gen, trends, tts, upload_youtube, video
+from . import db, history, images, mascot, script_gen, trends, tts, upload_facebook, upload_youtube, video
 
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 
@@ -44,12 +44,19 @@ def main() -> int:
     out = os.path.join(ROOT, "output")
     os.makedirs(out, exist_ok=True)
 
+    year = topic.get("year")
+    cal = mascot.prepare(
+        mascot.era_for_year(year),
+        topic.get("date_label") or dt.datetime.now(tz).strftime("%b %d"),
+        os.path.join(out, "cal"),
+    )
+    print("Era Cal:", mascot.era_for_year(year))
     clips = []
     for i, sc in enumerate(data["scenes"]):
         img, aud, clip = (os.path.join(out, f"s{i}.{e}") for e in ("png", "mp3", "mp4"))
         images.make_image(sc["image_prompt"], img, cfg["width"], cfg["height"])
         tts.make_voice(sc["narration"], cfg["voice"], aud)
-        video.make_clip(img, aud, clip, cfg["width"], cfg["height"], sc["narration"])
+        video.make_clip(img, aud, clip, cfg["width"], cfg["height"], sc["narration"], cal, year)
         clips.append(clip)
         print(f"Scene {i + 1}/{len(data['scenes'])} selesai")
 
@@ -59,6 +66,13 @@ def main() -> int:
     vid = upload_youtube.upload(final, data, cfg.get("privacy", "private"))
     db.log_post(cfg["country"], topic["id"], data["title"], vid)
     print("Terupload:", f"https://youtube.com/shorts/{vid}")
+
+    if upload_facebook.enabled():
+        try:
+            fb = upload_facebook.upload(final, data)
+            print("Facebook Reel terkirim, video id:", fb)
+        except Exception as e:  # noqa: BLE001  YouTube sudah sukses, jangan gagalkan run
+            print("Facebook gagal (YouTube tetap sukses):", e)
     return 0
 
 
