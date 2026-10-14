@@ -11,14 +11,17 @@ from . import db, history, images, mascot, script_gen, trends, tts, upload_faceb
 
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 
+
 def load_cfg() -> dict:
     with open(os.path.join(ROOT, "config.json"), encoding="utf-8") as f:
         return json.load(f)
 
+
 def _process_one_profile(profile: dict, cfg: dict, tz, force: bool) -> bool:
+    """Proses 1 profil (1 video). Return True jika sukses upload."""
     merged_cfg = {**cfg, **profile}
     pid = merged_cfg.get("id", "default")
-    
+
     print(f"\n{'='*60}\n🚀 MEMULAI MODE: {pid.upper()}\n{'='*60}")
 
     source_type = merged_cfg.get("source", "history")
@@ -40,7 +43,7 @@ def _process_one_profile(profile: dict, cfg: dict, tz, force: bool) -> bool:
                 print(f"[{pid}] Tidak ada topik history baru. Skip.")
                 return False
             print(f"[{pid}] Topik acak:", topic["title"])
-            
+
     # === LOGIKA KHUSUS: HISTORY TRIVIA (Membuat Pertanyaan Baru) ===
     elif pid == "history_trivia":
         used = db.used_topics(merged_cfg["country"])
@@ -48,14 +51,15 @@ def _process_one_profile(profile: dict, cfg: dict, tz, force: bool) -> bool:
             candidates = history.get_topics(tz)
         else:
             candidates = trends.get_trends(merged_cfg["country"])
-            
+
         topic = next((t for t in candidates if t["id"] not in used), None)
         if not topic:
             print(f"[{pid}] Tidak ada topik trivia baru. Skip.")
             return False
         print(f"[{pid}] Topik trivia baru:", topic["title"])
 
-    if not topic: return False
+    if not topic:
+        return False
 
     # Generate Script
     data = script_gen.generate(topic, merged_cfg)
@@ -97,6 +101,7 @@ def _process_one_profile(profile: dict, cfg: dict, tz, force: bool) -> bool:
 
     return True
 
+
 def main() -> int:
     cfg = load_cfg()
     tz = ZoneInfo(cfg["timezone"])
@@ -111,12 +116,20 @@ def main() -> int:
         print("Kuota harian tercapai. Lewati.")
         return 0
 
-    profiles = cfg.get("profiles", [{
-        "id": "default", "source": cfg.get("source", "history"),
-        "language": cfg["language"], "niche": cfg.get("niche", ""),
-        "angle": cfg.get("angle", ""), "scenes": cfg["scenes"],
-        "width": cfg["width"], "height": cfg["height"], "voice": cfg["voice"],
-    }])
+    # === PERBAIKAN DI SINI: fallback aman dengan .get() ===
+    profiles = cfg.get("profiles")
+    if not profiles:
+        profiles = [{
+            "id": "default",
+            "source": cfg.get("source", "history"),
+            "language": cfg.get("language", "English"),
+            "niche": cfg.get("niche", ""),
+            "angle": cfg.get("angle", ""),
+            "scenes": cfg.get("scenes", 5),
+            "width": cfg.get("width", 1080),
+            "height": cfg.get("height", 1920),
+            "voice": cfg.get("voice", "en_US-ryan-high"),
+        }]
 
     success_count = 0
     for profile in profiles:
@@ -126,7 +139,8 @@ def main() -> int:
 
         try:
             ok = _process_one_profile(profile, cfg, tz, force)
-            if ok: success_count += 1
+            if ok:
+                success_count += 1
         except Exception as e:
             pid = profile.get("id", "default")
             print(f"\n❌ GAGAL di mode {pid}: {e}")
@@ -135,6 +149,7 @@ def main() -> int:
 
     print(f"\n🏁 SELESAI. Total video sukses: {success_count}/{len(profiles)}")
     return 0
+
 
 if __name__ == "__main__":
     sys.exit(main())
