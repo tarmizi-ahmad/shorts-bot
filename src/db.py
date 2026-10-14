@@ -46,3 +46,50 @@ def log_post(country: str, topic_id: str, title: str, video_id: str) -> None:
         timeout=30,
     )
     r.raise_for_status()
+
+# --- STATE MANAGEMENT UNTUK TRIVIA (CLIFFHANGER) ---
+
+def get_pending_trivia():
+    """Mengambil topik trivia yang disimpan kemarin untuk dijawab hari ini."""
+    try:
+        url = f"{os.environ['SUPABASE_URL']}/rest/v1/bot_state?key=eq.pending_trivia&select=data"
+        headers = {
+            "apikey": os.environ["SUPABASE_KEY"],
+            "Authorization": f"Bearer {os.environ['SUPABASE_KEY']}"
+        }
+        r = requests.get(url, headers=headers, timeout=15)
+        if r.status_code == 200:
+            res = r.json()
+            if res and len(res) > 0:
+                return res[0]["data"]
+    except Exception as e:
+        print("⚠️ Gagal ambil pending trivia:", e)
+    return None
+
+def save_pending_trivia(topic):
+    """Menyimpan topik trivia hari ini agar dijawab besok."""
+    try:
+        url = f"{os.environ['SUPABASE_URL']}/rest/v1/bot_state"
+        headers = {
+            "apikey": os.environ["SUPABASE_KEY"],
+            "Authorization": f"Bearer {os.environ['SUPABASE_KEY']}",
+            "Content-Type": "application/json",
+            "Prefer": "resolution=merge-duplicates" # Upsert
+        }
+        payload = {"key": "pending_trivia", "data": topic}
+        requests.post(url, headers=headers, json=payload, timeout=15)
+        print("✅ Topik trivia disimpan untuk dibahas besok.")
+    except Exception as e:
+        print("⚠️ Gagal simpan pending trivia:", e)
+
+def clear_pending_trivia():
+    """Menghapus state trivia setelah dipakai agar tidak berulang."""
+    try:
+        url = f"{os.environ['SUPABASE_URL']}/rest/v1/bot_state?key=eq.pending_trivia"
+        headers = {
+            "apikey": os.environ["SUPABASE_KEY"],
+            "Authorization": f"Bearer {os.environ['SUPABASE_KEY']}"
+        }
+        requests.delete(url, headers=headers, timeout=15)
+    except Exception as e:
+        print("⚠️ Gagal hapus pending trivia:", e)
