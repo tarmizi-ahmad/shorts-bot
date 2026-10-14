@@ -3,13 +3,31 @@
   "language": "English",
   "timezone": "America/New_York",
   "source": "history",
-  "niche": "Today in History: one famous event that happened on this date, explained in 45 seconds",
-  "angle": "start with a gripping hook about the event, give the key facts and what happened right after, explain why it still matters to Americans today, and end with a clear opinion and a question to the viewer",
   "peak_hours": [12, 19],
   "max_posts_per_day": 2,
-  "scenes": 6,
-  "width": 1080,
-  "height": 1920,
-  "voice": "en_US-ryan-high",
-  "privacy": "private"
+  "privacy": "private",
+  "profiles": [
+    {
+      "id": "history_fact",
+      "source": "history",
+      "language": "English",
+      "niche": "Today in History: one famous event that happened on this date",
+      "angle": "gripping hook, key facts, why it matters today, clear opinion",
+      "scenes": 6,
+      "width": 1080,
+      "height": 1920,
+      "voice": "en_US-ryan-high"
+    },
+    {
+      "id": "history_trivia",
+      "source": "trends",
+      "language": "English",
+      "niche": "Mind-blowing historical facts, mysteries, or 'guess the historical figure' trivia",
+      "angle": "highly interactive, challenge the viewer's knowledge, make them want to guess in the comments before the reveal",
+      "scenes": 4,
+      "width": 1080,
+      "height": 1920,
+      "voice": "en_US-lessac-medium"
+    }
+  ]
 }

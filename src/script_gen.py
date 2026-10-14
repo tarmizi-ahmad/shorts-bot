@@ -1,4 +1,5 @@
-"""Buat naskah + prompt gambar orisinal dengan Gemini API (free tier)."""
+"""Buat naskah + prompt gambar orisinal dengan Gemini API (free tier).
+Mendukung 2 mode: 'history_fact' (berita sejarah) dan 'history_trivia' (tebak-tebakan sejarah)."""
 import json
 import os
 import re
@@ -12,6 +13,7 @@ SKIP = ("image", "tts", "live", "audio", "lite", "exp", "embedding", "robotics",
 WAITS = [20, 60, 120]
 RETRY_STATUS = (429, 500, 502, 503, 504)
 
+# PERHATIAN: Bagian "STRUKTUR NASKAH" sekarang pakai placeholder {custom_structure}
 PROMPT = """Kamu penulis naskah YouTube Shorts dalam bahasa {language} untuk audiens {country}.
 Niche channel: {niche}
 Sudut pandang khas channel: {angle}
@@ -28,16 +30,9 @@ ATURAN ISI (penting untuk kualitas & orisinalitas):
 - Bukan sekadar menceritakan ulang. Wajib ada NILAI TAMBAH: konteks singkat yang
   jarang disebut, kenapa ini penting bagi penonton, dan satu pendapat/prediksi
   yang jelas (bertanda opini).
-- Jika topik tidak cocok dengan niche (mis. musik, selebriti gosip), cari sudut
-  yang cocok dengan niche, atau tetap bawakan lewat sudut pandang channel.
+- Jika topik tidak cocok dengan niche, cari sudut yang cocok dengan niche.
 
-STRUKTUR NASKAH (ikuti urutan scenes):
-1. Scene 1 = HOOK, maksimal 12 kata, memancing rasa penasaran dalam 2 detik
-   (pertanyaan mengejutkan / klaim berani yang benar / kontras). Jangan mulai dengan
-   "Hi", "Hello", atau perkenalan.
-2. Scene tengah = fakta inti + konteks + "kenapa ini penting".
-3. Scene terakhir = opini/prediksi singkat + ajakan komentar berupa pertanyaan
-   (mis. "Do you agree?"), maks 1 kalimat. Jangan minta subscribe berlebihan.
+{custom_structure}
 - Kalimat pendek, ritme cepat, tanpa basa-basi.
 {era_story}
 Balas HANYA JSON dengan bentuk:
@@ -46,7 +41,7 @@ Balas HANYA JSON dengan bentuk:
   "description": "deskripsi 2 kalimat + 3 hashtag",
   "tags": ["tag1", "tag2", "tag3"],
   "scenes": [
-    {{"narration": "1-2 kalimat narasi singkat dalam {language}", "image_prompt": "maks 25 kata, bahasa Inggris, gaya komik/kartun, tanpa teks di gambar, {image_rule}"}}
+    {{"narration": "1-2 kalimat narasi singkat dalam {language}", "image_prompt": "maks 25 kata, bahasa Inggris, {image_rule}"}}
   ]
 }}
 Jumlah scenes: tepat {n}. Total narasi sekitar 40-50 detik bila dibaca."""
@@ -203,30 +198,60 @@ def _parse(text: str) -> dict:
 
 
 def generate(topic: dict, cfg: dict) -> dict:
-    # Maskot Cal ditempel lewat video.py, jadi gambar AI hanya LATAR tanpa tokoh.
-    character_block = (
-        "Maskot channel (kalender kecil bernama Cal) ditempel di tengah-bawah layar oleh editor video. "
-        "Setiap image_prompt HANYA melukiskan LATAR/pemandangan: tempat, bangunan, benda, suasana. "
-        "JANGAN ada tokoh, wajah, atau kerumunan di depan; sisakan ruang kosong di tengah-bawah gambar. "
-        "Tokoh sejarah hanya boleh berupa siluet kecil di kejauhan.\n"
-    )
-    image_rule = "hanya latar era itu, tanpa tokoh/wajah, ruang kosong di tengah-bawah"
-    year = topic.get("year")
-    era_block, era_fields, era_story = "", "", ""
-    if year:
-        era_block = (
-            f"TAHUN KEJADIAN: {year}. Semua visual HARUS terasa seperti era dan lokasi kejadian itu: "
-            "latar (bangunan, kendaraan, teknologi, warna, suasana) mencerminkan era itu, bukan zaman modern.\n"
+    """Generate naskah. cfg bisa berisi 'id' = 'history_fact' atau 'history_trivia'."""
+    mode = cfg.get("id", "history_fact")
+
+    # ====== MODE TRIVIA: Interaktif, menantang, tetap seputar sejarah/fakta ======
+    if mode == "history_trivia":
+        character_block = (
+            "Maskot Cal ada di tengah-bawah. Gambar latar HARUS: cinematic, mysterious, "
+            "or highly detailed historical illustration style. NO text in image. "
+            "Leave empty space at lower center for the mascot. Make it intriguing.\n"
         )
-        era_fields = (
-            '  "era_setting": "suasana/latar era itu (arsitektur, kendaraan, teknologi, palet warna), bahasa Inggris, maks 20 kata",\n'
+        image_rule = "cinematic, mysterious, detailed historical background, empty space at lower center, no text"
+        era_block, era_fields, era_story = "", "", ""
+        custom_structure = """STRUKTUR NASKAH (HISTORICAL TRIVIA / MIND-BLOWING FACT):
+1. Scene 1 = THE CHALLENGE/HOOK. Ajukan pertanyaan atau klaim mengejutkan yang membuat penonton ingin menebak.
+   Contoh: "Can you guess which historical figure survived 5 assassination attempts?"
+2. Scene 2 = THE CLUES. Berikan 2 petunjuk menarik yang membuat penonton berpikir, tapi JANGAN beri jawaban.
+3. Scene 3 = THE REVEAL & CALL TO ACTION. Berikan jawabannya singkat, lalu akhiri: "Did you get it right? Comment below!"
+- Nada: Penasaran, menantang, satisfying saat jawaban terungkap."""
+
+    # ====== MODE SEJARAH NORMAL (default) ======
+    else:
+        character_block = (
+            "Maskot channel (kalender kecil bernama Cal) ditempel di tengah-bawah layar oleh editor video. "
+            "Setiap image_prompt HANYA melukiskan LATAR/pemandangan: tempat, bangunan, benda, suasana. "
+            "JANGAN ada tokoh, wajah, atau kerumunan di depan; sisakan ruang kosong di tengah-bawah gambar. "
+            "Tokoh sejarah hanya boleh berupa siluet kecil di kejauhan.\n"
         )
-        era_story = (
-            f"- Bawa penonton MERASAKAN suasana tahun {year}: di scene 2-3 sebut 1-2 detail "
-            "sensorik/keseharian era itu (suara, benda, teknologi, tren) yang PASTI benar. "
-            "Boleh memakai kalimat 'Imagine it's ...' untuk mengajak membayangkan.\n"
-        )
+        image_rule = "hanya latar era itu, tanpa tokoh/wajah, ruang kosong di tengah-bawah"
+        year = topic.get("year")
+        if year:
+            era_block = (
+                f"TAHUN KEJADIAN: {year}. Semua visual HARUS terasa seperti era dan lokasi kejadian itu: "
+                "latar (bangunan, kendaraan, teknologi, warna, suasana) mencerminkan era itu, bukan zaman modern.\n"
+            )
+            era_fields = (
+                '  "era_setting": "suasana/latar era itu (arsitektur, kendaraan, teknologi, palet warna), bahasa Inggris, maks 20 kata",\n'
+            )
+            era_story = (
+                f"- Bawa penonton MERASAKAN suasana tahun {year}: di scene 2-3 sebut 1-2 detail "
+                "sensorik/keseharian era itu (suara, benda, teknologi, tren) yang PASTI benar. "
+                "Boleh memakai kalimat 'Imagine it's ...' untuk mengajak membayangkan.\n"
+            )
+        else:
+            era_block, era_fields, era_story = "", "", ""
+        custom_structure = """STRUKTUR NASKAH (ikuti urutan scenes):
+1. Scene 1 = HOOK, maksimal 12 kata, memancing rasa penasaran dalam 2 detik
+   (pertanyaan mengejutkan / klaim berani yang benar / kontras). Jangan mulai dengan
+   "Hi", "Hello", atau perkenalan.
+2. Scene tengah = fakta inti + konteks + "kenapa ini penting".
+3. Scene terakhir = opini/prediksi singkat + ajakan komentar berupa pertanyaan
+   (mis. "Do you agree?"), maks 1 kalimat. Jangan minta subscribe berlebihan."""
+
     prompt = PROMPT.format(
+        custom_structure=custom_structure,
         era_block=era_block,
         era_fields=era_fields,
         era_story=era_story,
@@ -259,7 +284,13 @@ def generate(topic: dict, cfg: dict) -> dict:
 
     data["title"] = make_title(data.get("hook_title") or data.get("title") or topic["title"], topic)
     setting = (data.get("era_setting") or "").strip()
-    style = "flat vector comic style, bold outlines, wide shot, no people in foreground, empty space at lower center, no text"
+    
+    # Style gambar disesuaikan mode
+    if mode == "history_trivia":
+        style = "cinematic historical illustration, mysterious lighting, highly detailed, no people in foreground, empty space at lower center, no text"
+    else:
+        style = "flat vector comic style, bold outlines, wide shot, no people in foreground, empty space at lower center, no text"
+    
     for sc in data["scenes"]:
         parts = [sc["image_prompt"]]
         if setting:
