@@ -19,16 +19,19 @@ def load_cfg() -> dict:
 
 def _process_one_profile(profile: dict, cfg: dict, tz, force: bool) -> bool:
     """Proses 1 profil (1 video). Return True jika sukses upload."""
-    pid = profile.get("id", "default")
+    # GABUNGKAN config global dengan config profil (profil menimpa global jika ada key sama)
+    merged_cfg = {**cfg, **profile}
+    pid = merged_cfg.get("id", "default")
+    
     print(f"\n{'='*60}\n🚀 MEMULAI MODE: {pid.upper()}\n{'='*60}")
 
     # 1. Ambil Topik
-    used = db.used_topics(cfg["country"])
-    source_type = profile.get("source", cfg.get("source", "history"))
+    used = db.used_topics(merged_cfg["country"])
+    source_type = merged_cfg.get("source", "history")
     if source_type == "history":
         candidates = history.get_topics(tz)
     else:
-        candidates = trends.get_trends(cfg["country"])
+        candidates = trends.get_trends(merged_cfg["country"])
 
     topic = next((t for t in candidates if t["id"] not in used), None)
     if not topic:
@@ -36,8 +39,8 @@ def _process_one_profile(profile: dict, cfg: dict, tz, force: bool) -> bool:
         return False
     print(f"[{pid}] Topik:", topic["title"])
 
-    # 2. Generate Script
-    data = script_gen.generate(topic, profile)
+    # 2. Generate Script (Sekarang merged_cfg punya "country", "language", dll)
+    data = script_gen.generate(topic, merged_cfg)
     out = os.path.join(ROOT, "output", pid)
     os.makedirs(out, exist_ok=True)
 
@@ -52,9 +55,9 @@ def _process_one_profile(profile: dict, cfg: dict, tz, force: bool) -> bool:
     clips = []
     for i, sc in enumerate(data["scenes"]):
         img, aud, clip = (os.path.join(out, f"s{i}.{e}") for e in ("png", "mp3", "mp4"))
-        images.make_image(sc["image_prompt"], img, profile["width"], profile["height"])
-        tts.make_voice(sc["narration"], profile["voice"], aud)
-        video.make_clip(img, aud, clip, profile["width"], profile["height"], sc["narration"], cal, year)
+        images.make_image(sc["image_prompt"], img, merged_cfg["width"], merged_cfg["height"])
+        tts.make_voice(sc["narration"], merged_cfg["voice"], aud)
+        video.make_clip(img, aud, clip, merged_cfg["width"], merged_cfg["height"], sc["narration"], cal, year)
         clips.append(clip)
         print(f"[{pid}] Scene {i + 1}/{len(data['scenes'])} selesai")
 
@@ -62,11 +65,11 @@ def _process_one_profile(profile: dict, cfg: dict, tz, force: bool) -> bool:
     final = os.path.join(out, "final.mp4")
     video.concat(clips, os.path.join(out, "list.txt"), final)
 
-    vid = upload_youtube.upload(final, data, cfg.get("privacy", "private"))
-    db.log_post(cfg["country"], topic["id"], data["title"], vid)
+    vid = upload_youtube.upload(final, data, merged_cfg.get("privacy", "private"))
+    db.log_post(merged_cfg["country"], topic["id"], data["title"], vid)
     print(f"[{pid}] ✅ Terupload: https://youtube.com/shorts/{vid}")
 
-    # 6. Upload Facebook (opsional, tetap di-skip kalau token kosong)
+    # 6. Upload Facebook (opsional, aman di-skip jika token kosong)
     if upload_facebook.enabled():
         try:
             fb = upload_facebook.upload(final, data)
