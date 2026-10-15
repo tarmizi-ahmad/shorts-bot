@@ -61,8 +61,10 @@ def get_pending_trivia():
             res = r.json()
             if res and len(res) > 0:
                 raw_data = res[0]["data"]
+                
                 # PERBAIKAN PENTING: Handle jika data tersimpan sebagai string, bukan jsonb
                 if isinstance(raw_data, str):
+                    print("⚠️ [DB] Data terbaca sebagai string, mencoba parse JSON...")
                     topic = json.loads(raw_data)
                 else:
                     topic = raw_data
