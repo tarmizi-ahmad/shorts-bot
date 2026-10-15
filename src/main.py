@@ -26,7 +26,7 @@ def _process_one_profile(profile: dict, cfg: dict, tz, force: bool) -> bool:
 
     # === LOGIKA KHUSUS: HISTORY FACT (Mengambil Trivia Kemarin) ===
     if pid == "history_fact":
-        pending = db.get_pending_trivia() if not force else None
+        #pending = db.get_pending_trivia() if not force else None
         if pending:
             topic = pending
             print(f"🧠 [{pid}] Menggunakan JAWABAN trivia kemarin: {topic.get('title', 'Unknown')[:60]}...")
