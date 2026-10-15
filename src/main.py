@@ -11,17 +11,14 @@ from . import db, history, images, mascot, script_gen, trends, tts, upload_faceb
 
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 
-
 def load_cfg() -> dict:
     with open(os.path.join(ROOT, "config.json"), encoding="utf-8") as f:
         return json.load(f)
 
-
 def _process_one_profile(profile: dict, cfg: dict, tz, force: bool) -> bool:
-    """Proses 1 profil (1 video). Return True jika sukses upload."""
     merged_cfg = {**cfg, **profile}
     pid = merged_cfg.get("id", "default")
-
+    
     print(f"\n{'='*60}\n🚀 MEMULAI MODE: {pid.upper()}\n{'='*60}")
 
     source_type = merged_cfg.get("source", "history")
@@ -32,10 +29,10 @@ def _process_one_profile(profile: dict, cfg: dict, tz, force: bool) -> bool:
         pending = db.get_pending_trivia() if not force else None
         if pending:
             topic = pending
-            print(f"[{pid}] 🧠 Menggunakan JAWABAN trivia kemarin: {topic.get('title', 'Unknown')}")
+            print(f"🧠 [{pid}] Menggunakan JAWABAN trivia kemarin: {topic.get('title', 'Unknown')[:60]}...")
             db.clear_pending_trivia()
         else:
-            print(f"[{pid}] Tidak ada trivia kemarin (atau mode force). Mengambil topik history acak.")
+            print(f"⚠️ [{pid}] Tidak ada trivia kemarin (atau mode force). Mengambil topik history acak.")
             used = db.used_topics(merged_cfg["country"])
             candidates = history.get_topics(tz)
             topic = next((t for t in candidates if t["id"] not in used), None)
@@ -43,7 +40,7 @@ def _process_one_profile(profile: dict, cfg: dict, tz, force: bool) -> bool:
                 print(f"[{pid}] Tidak ada topik history baru. Skip.")
                 return False
             print(f"[{pid}] Topik acak:", topic["title"])
-
+            
     # === LOGIKA KHUSUS: HISTORY TRIVIA (Membuat Pertanyaan Baru) ===
     elif pid == "history_trivia":
         used = db.used_topics(merged_cfg["country"])
@@ -51,7 +48,7 @@ def _process_one_profile(profile: dict, cfg: dict, tz, force: bool) -> bool:
             candidates = history.get_topics(tz)
         else:
             candidates = trends.get_trends(merged_cfg["country"])
-
+            
         topic = next((t for t in candidates if t["id"] not in used), None)
         if not topic:
             print(f"[{pid}] Tidak ada topik trivia baru. Skip.")
@@ -101,7 +98,6 @@ def _process_one_profile(profile: dict, cfg: dict, tz, force: bool) -> bool:
 
     return True
 
-
 def main() -> int:
     cfg = load_cfg()
     tz = ZoneInfo(cfg["timezone"])
@@ -116,7 +112,6 @@ def main() -> int:
         print("Kuota harian tercapai. Lewati.")
         return 0
 
-    # === PERBAIKAN DI SINI: fallback aman dengan .get() ===
     profiles = cfg.get("profiles")
     if not profiles:
         profiles = [{
@@ -149,7 +144,6 @@ def main() -> int:
 
     print(f"\n🏁 SELESAI. Total video sukses: {success_count}/{len(profiles)}")
     return 0
-
 
 if __name__ == "__main__":
     sys.exit(main())
