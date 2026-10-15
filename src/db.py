@@ -4,6 +4,8 @@ import json
 import os
 import requests
 
+print("🚨 DEBUG: FILE DB.PY VERSI TERBARU SUDAH TERLOAD! 🚨")
+
 def _h():
     key = os.environ["SUPABASE_KEY"]
     h = {"apikey": key, "Content-Type": "application/json"}
