@@ -1,4 +1,5 @@
-"""Pipeline: trending -> naskah -> gambar -> narasi -> video -> upload."""
+"""Pipeline: trending -> naskah -> gambar -> narasi -> video -> upload.
+Mendukung multi-profile dengan state Supabase (Trivia hari ini = Fact besok)."""
 import datetime as dt
 import json
 import os
@@ -29,7 +30,8 @@ def _process_one_profile(profile: dict, cfg: dict, tz, force: bool) -> str:
     """Return link video jika sukses, atau error message jika gagal."""
     merged_cfg = {**cfg, **profile}
     pid = merged_cfg.get("id", "default")
-    print(f"\n{'='*60}\n🚀 MODE: {pid.upper()}\n{'='*60}")
+    
+    print(f"\n{'='*60}\n🚀 MEMULAI MODE: {pid.upper()}\n{'='*60}")
 
     source_type = merged_cfg.get("source", "history")
     topic = None
@@ -39,15 +41,16 @@ def _process_one_profile(profile: dict, cfg: dict, tz, force: bool) -> str:
         pending = db.get_pending_trivia()
         if pending:
             topic = pending
-            used_pending_trivia = True  # ⭐ Tandai bahwa kita memakai data ini
-            print(f"🧠 [{pid}] Menggunakan JAWABAN trivia kemarin")
+            used_pending_trivia = True
+            print(f"🧠 [{pid}] Menggunakan JAWABAN trivia kemarin: {topic.get('title', 'Unknown')[:60]}...")
         else:
+            print(f"⚠️ [{pid}] Tidak ada trivia kemarin. Mengambil topik history acak.")
             used = db.used_topics(merged_cfg["country"])
             candidates = history.get_topics(tz)
             topic = next((t for t in candidates if t["id"] not in used), None)
             if not topic:
                 return f"[{pid}] Tidak ada topik baru"
-            print(f"[{pid}] Topik acak")
+            print(f"[{pid}] Topik acak: {topic['title']}")
 
     elif pid == "history_trivia":
         used = db.used_topics(merged_cfg["country"])
@@ -55,11 +58,12 @@ def _process_one_profile(profile: dict, cfg: dict, tz, force: bool) -> str:
         topic = next((t for t in candidates if t["id"] not in used), None)
         if not topic:
             return f"[{pid}] Tidak ada topik baru"
-        print(f"[{pid}] Topik trivia baru")
+        print(f"[{pid}] Topik trivia baru: {topic['title']}")
 
     if not topic:
         return f"[{pid}] Topik kosong"
 
+    # Generate Script (Log detail akan muncul dari dalam script_gen.py)
     data = script_gen.generate(topic, merged_cfg)
     out = os.path.join(OUT_DIR, pid)
     os.makedirs(out, exist_ok=True)
@@ -68,6 +72,7 @@ def _process_one_profile(profile: dict, cfg: dict, tz, force: bool) -> str:
     era = mascot.era_for_year(year) if year else "modern"
     date_label = topic.get("date_label") or dt.datetime.now(tz).strftime("%b %d")
     cal = mascot.prepare(era, date_label, os.path.join(out, "cal"))
+    print(f"[{pid}] Era Cal: {era}")
 
     clips = []
     for i, sc in enumerate(data["scenes"]):
@@ -76,14 +81,15 @@ def _process_one_profile(profile: dict, cfg: dict, tz, force: bool) -> str:
         tts.make_voice(sc["narration"], merged_cfg["voice"], aud)
         video.make_clip(img, aud, clip, merged_cfg["width"], merged_cfg["height"], sc["narration"], cal, year)
         clips.append(clip)
+        print(f"[{pid}] Scene {i + 1}/{len(data['scenes'])} selesai")
 
     final = os.path.join(out, "final.mp4")
     video.concat(clips, os.path.join(out, "list.txt"), final)
 
     # ⭐ UPLOAD: Jika baris ini gagal (Exception), kode di bawahnya TIDAK akan jalan.
-    # Artinya used_pending_trivia tidak akan diproses, dan data tetap aman di DB.
     vid = upload_youtube.upload(final, data, merged_cfg.get("privacy", "private"))
     db.log_post(merged_cfg["country"], topic["id"], data["title"], vid)
+    print(f"[{pid}] ✅ Terupload: https://youtube.com/shorts/{vid}")
 
     # ⭐ BARU SEKARANG AMAN: clear pending trivia & simpan trivia baru
     if used_pending_trivia:
@@ -95,9 +101,10 @@ def _process_one_profile(profile: dict, cfg: dict, tz, force: bool) -> str:
 
     if upload_facebook.enabled():
         try:
-            upload_facebook.upload(final, data)
-        except Exception:  # noqa: BLE001
-            pass  # Abaikan error FB, YouTube sudah sukses
+            fb = upload_facebook.upload(final, data)
+            print(f"[{pid}] Facebook Reel terkirim, video id: {fb}")
+        except Exception as e:  # noqa: BLE001
+            print(f"[{pid}] Facebook gagal: {e}")
 
     return f"https://youtube.com/shorts/{vid}"
 
@@ -109,10 +116,14 @@ def main() -> int:
     force = os.environ.get("FORCE") == "1"
 
     if not force and now.hour not in cfg["peak_hours"]:
-        write_report([f"SKIP: Jam {now.hour} bukan jam ramai"])
+        msg = f"Jam {now.hour} bukan jam ramai {cfg['peak_hours']} ({cfg['timezone']})."
+        print(msg)
+        write_report([f"SKIP: {msg}"])
         return 0
 
     if db.posted_today(cfg["country"], tz) >= cfg["max_posts_per_day"] and not force:
+        msg = "Kuota harian tercapai. Lewati."
+        print(msg)
         write_report(["SKIP: Kuota harian tercapai"])
         return 0
 
@@ -128,6 +139,7 @@ def main() -> int:
     for profile in profiles:
         pid = profile.get("id", "default")
         if db.posted_today(cfg["country"], tz) >= cfg["max_posts_per_day"] and not force:
+            print("Kuota harian tercapai. Stop.")
             results.append(f"[{pid}] Kuota tercapai")
             continue
         try:
@@ -137,9 +149,14 @@ def main() -> int:
             # Ambil root cause (baris terakhir dari traceback)
             tb = traceback.format_exc()
             root_cause = tb.strip().split("\n")[-1]
+            print(f"\n❌ GAGAL di mode {pid}: {root_cause}")
             results.append(f"[{pid}] ERROR: {root_cause}")
 
+    # Tulis laporan ringkas untuk email
     write_report(results)
+    
+    ok_count = sum(1 for r in results if "https://youtube.com/shorts/" in r)
+    print(f"\n🏁 SELESAI. Total video sukses: {ok_count}/{len(profiles)}")
     return 0
 
 
@@ -149,5 +166,6 @@ if __name__ == "__main__":
     except Exception:
         tb = traceback.format_exc()
         root_cause = tb.strip().split("\n")[-1]
+        print(f"\n❌ FATAL ERROR: {root_cause}")
         write_report([f"FATAL ERROR: {root_cause}"])
         sys.exit(1)
