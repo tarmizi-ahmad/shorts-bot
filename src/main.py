@@ -12,6 +12,9 @@ ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 OUT_DIR = os.path.join(ROOT, "output")
 REPORT_FILE = os.path.join(OUT_DIR, "report.txt")
 
+# Topik yang sudah dipilih di run ini (supaya 2 profil tidak memilih topik sama, termasuk saat dry-run)
+RUN_USED: set = set()
+
 
 def load_cfg() -> dict:
     with open(os.path.join(ROOT, "config.json"), encoding="utf-8") as f:
@@ -43,7 +46,7 @@ def _process_one_profile(profile: dict, cfg: dict, tz, force: bool) -> str:
             print(f"🧠 [{pid}] Menggunakan JAWABAN trivia kemarin: {topic.get('title', 'Unknown')[:60]}...")
         else:
             print(f"⚠️ [{pid}] Tidak ada trivia kemarin. Mengambil topik history acak.")
-            used = db.used_topics(merged_cfg["country"])
+            used = set(db.used_topics(merged_cfg["country"])) | RUN_USED
             candidates = history.get_topics(tz)
             topic = next((t for t in candidates if t["id"] not in used), None)
             if not topic:
@@ -51,7 +54,7 @@ def _process_one_profile(profile: dict, cfg: dict, tz, force: bool) -> str:
             print(f"[{pid}] Topik acak: {topic['title']}")
 
     elif pid == "history_trivia":
-        used = db.used_topics(merged_cfg["country"])
+        used = set(db.used_topics(merged_cfg["country"])) | RUN_USED
         candidates = history.get_topics(tz) if source_type == "history" else trends.get_trends(merged_cfg["country"])
         topic = next((t for t in candidates if t["id"] not in used), None)
         if not topic:
@@ -60,6 +63,7 @@ def _process_one_profile(profile: dict, cfg: dict, tz, force: bool) -> str:
 
     if not topic:
         return f"[{pid}] Topik kosong"
+    RUN_USED.add(topic["id"])
 
     is_trivia = pid == "history_trivia"
     year = topic.get("year")
@@ -95,6 +99,11 @@ def _process_one_profile(profile: dict, cfg: dict, tz, force: bool) -> str:
     final = os.path.join(out, "final.mp4")
     video.concat(clips, os.path.join(out, "list.txt"), final)
 
+    if os.environ.get("UPLOAD_YOUTUBE") == "0":
+        # DRY-RUN: video tetap jadi (lihat Artifacts), tapi tidak ada upload & database tidak disentuh.
+        print(f"[{pid}] 🧪 DRY-RUN: upload YouTube/Facebook dilewati. Video: {final}")
+        return f"[{pid}] DRY-RUN video tersimpan: {final}"
+
     vid = upload_youtube.upload(final, data, merged_cfg.get("privacy", "private"))
     db.log_post(merged_cfg["country"], topic["id"], data["title"], vid)
     print(f"[{pid}] ✅ Terupload: https://youtube.com/shorts/{vid}")
@@ -120,7 +129,10 @@ def main() -> int:
     cfg = load_cfg()
     tz = ZoneInfo(cfg["timezone"])
     now = dt.datetime.now(tz)
-    force = os.environ.get("FORCE") == "1"
+    dry_run = os.environ.get("UPLOAD_YOUTUBE") == "0"
+    force = os.environ.get("FORCE") == "1" or dry_run  # dry-run tidak memposting, jadi cek jam & kuota dilewati
+    if dry_run:
+        print("🧪 MODE DRY-RUN: video dibuat tapi TIDAK diunggah ke YouTube/Facebook.")
 
     if not force and now.hour not in cfg["peak_hours"]:
         msg = f"Jam {now.hour} bukan jam ramai {cfg['peak_hours']} ({cfg['timezone']})."
@@ -167,7 +179,7 @@ def main() -> int:
 
     write_report(results)
 
-    ok_count = sum(1 for r in results if "https://youtube.com/shorts/" in r)
+    ok_count = sum(1 for r in results if "https://youtube.com/shorts/" in r or "DRY-RUN video" in r)
     print(f"\n🏁 SELESAI. Total video sukses: {ok_count}/{len(profiles)}")
     return 0
 
