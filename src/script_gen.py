@@ -1,4 +1,4 @@
-"""Buat naskah + prompt gambar orisinal. Mode: history_fact & history_trivia (Cliffhanger)."""
+"""Buat naskah + prompt gambar orisinal. Mode: history_fact (jawaban/fakta) & history_trivia (tebak-tebakan)."""
 import json
 import os
 import re
@@ -30,14 +30,15 @@ ATURAN ISI (penting untuk kualitas & orisinalitas):
 {era_story}
 Balas HANYA JSON dengan bentuk:
 {{
-{era_fields}  "hook_title": "3-7 kata pemicu rasa penasaran, tanpa tahun, tanpa tanda kutip",
-  "description": "deskripsi 2 kalimat + 3 hashtag",
+{era_fields}  "hook_title": "{title_rule}",
+  "description": "deskripsi 2 kalimat + 3 hashtag{desc_rule}",
   "tags": ["tag1", "tag2", "tag3"],
   "scenes": [
     {{"narration": "1-2 kalimat narasi singkat dalam {language}", "image_prompt": "maks 25 kata, bahasa Inggris, {image_rule}"}}
   ]
 }}
 Jumlah scenes: tepat {n}. Total narasi sekitar 40-50 detik bila dibaca."""
+
 
 def list_models(key: str) -> list[str]:
     forced = os.environ.get("GEMINI_MODEL")
@@ -59,9 +60,12 @@ def list_models(key: str) -> list[str]:
     def ver(n: str) -> float:
         m = re.search(r"(\d+(?:\.\d+)?)", n)
         return float(m.group(1)) if m else 0.0
+
     return sorted(names, key=ver, reverse=True)[:3]
 
+
 SERIES = "What Happened Today"
+
 
 def make_title(hook: str, topic: dict) -> str:
     hook = hook.strip().strip('"').rstrip(".!?:")
@@ -74,39 +78,56 @@ def make_title(hook: str, topic: dict) -> str:
         hook = hook[:room].rsplit(" ", 1)[0]
     return hook + tail
 
+
 def _gemini(prompt: str):
     key = os.environ.get("GEMINI_API_KEY")
-    if not key: return None
+    if not key:
+        return None
     body = {
         "contents": [{"parts": [{"text": prompt}]}],
         "generationConfig": {"responseMimeType": "application/json"},
     }
-    try: models = list_models(key)
-    except Exception as e:
-        print("Gemini list model gagal:", e); return None
+    try:
+        models = list_models(key)
+    except Exception as e:  # noqa: BLE001
+        print("Gemini list model gagal:", e)
+        return None
     for model in models:
         print("Model Gemini:", model)
         for wait in [0, 20]:
-            if wait: time.sleep(wait)
+            if wait:
+                print(f"Gemini sibuk, tunggu {wait}s...")
+                time.sleep(wait)
             try:
                 r = requests.post(GEN_URL.format(m=model), params={"key": key}, json=body, timeout=120)
-            except Exception as e: continue
-            if r.status_code in RETRY_STATUS: continue
-            if r.status_code != 200: break
+            except Exception as e:  # noqa: BLE001
+                print("Gemini error jaringan:", str(e)[:150])
+                continue
+            if r.status_code in RETRY_STATUS:
+                print("Gemini status", r.status_code)
+                continue
+            if r.status_code != 200:
+                print("Gemini status", r.status_code, r.text[:200])
+                break
             try:
                 text = r.json()["candidates"][0]["content"]["parts"][0]["text"]
                 print(f"Naskah dari: Gemini ({model})")
                 return text
-            except (KeyError, IndexError): break
+            except (KeyError, IndexError):
+                print("Gemini balasan kosong")
+                break
     return None
+
 
 def _groq(prompt: str):
     key = os.environ.get("GROQ_API_KEY")
-    if not key: return None
+    if not key:
+        return None
     model = os.environ.get("GROQ_MODEL", "llama-3.3-70b-versatile")
     print("Cadangan: Groq", model)
     for wait in [0, 15]:
-        if wait: time.sleep(wait)
+        if wait:
+            time.sleep(wait)
         try:
             r = requests.post(
                 "https://api.groq.com/openai/v1/chat/completions",
@@ -116,16 +137,24 @@ def _groq(prompt: str):
                     "response_format": {"type": "json_object"}, "temperature": 0.7,
                 }, timeout=120,
             )
-        except Exception as e: continue
-        if r.status_code in RETRY_STATUS: continue
-        if r.status_code != 200: return None
+        except Exception as e:  # noqa: BLE001
+            print("Groq error jaringan:", str(e)[:150])
+            continue
+        if r.status_code in RETRY_STATUS:
+            print("Groq status", r.status_code)
+            continue
+        if r.status_code != 200:
+            print("Groq status", r.status_code, r.text[:200])
+            return None
         print(f"Naskah dari: Groq ({model})")
         return r.json()["choices"][0]["message"]["content"]
     return None
 
+
 def _cloudflare_text(prompt: str):
     acc, tok = os.environ.get("CF_ACCOUNT_ID"), os.environ.get("CF_API_TOKEN")
-    if not acc or not tok: return None
+    if not acc or not tok:
+        return None
     model = os.environ.get("CF_TEXT_MODEL", "@cf/meta/llama-3.3-70b-instruct-fp8-fast")
     print("Cadangan: Cloudflare", model)
     try:
@@ -135,43 +164,77 @@ def _cloudflare_text(prompt: str):
             json={"messages": [{"role": "user", "content": prompt}], "max_tokens": 2500},
             timeout=180,
         )
-    except Exception as e: return None
-    if r.status_code != 200: return None
+    except Exception as e:  # noqa: BLE001
+        print("Cloudflare error jaringan:", str(e)[:150])
+        return None
+    if r.status_code != 200:
+        print("Cloudflare status", r.status_code, r.text[:200])
+        return None
     out = r.json().get("result", {}).get("response")
     print(f"Naskah dari: Cloudflare ({model})")
     return json.dumps(out) if isinstance(out, (dict, list)) else out
 
+
 def _parse(text: str) -> dict:
     text = (text or "").strip()
-    try: return json.loads(text)
+    try:
+        return json.loads(text)
     except json.JSONDecodeError:
         m = re.search(r"\{.*\}", text, re.S)
-        if not m: raise
+        if not m:
+            raise
         return json.loads(m.group(0))
+
 
 def generate(topic: dict, cfg: dict) -> dict:
     mode = cfg.get("id", "history_fact")
+    n = cfg["scenes"]
+    year = topic.get("year")
+    desc_rule = ""
 
     if mode == "history_trivia":
-        character_block = "Maskot Cal ada di tengah-bawah. Gambar latar HARUS: cinematic, mysterious, or highly detailed historical illustration style. NO text in image. Leave empty space at lower center. Make it intriguing.\n"
-        image_rule = "cinematic, mysterious, detailed historical background, empty space at lower center, no text"
-        era_block, era_fields, era_story = "", "", ""
-        custom_structure = """STRUKTUR NASKAH (HISTORICAL TRIVIA - CLIFFHANGER):
-1. Scene 1 = THE CHALLENGE. Ajukan pertanyaan mengejutkan tentang tokoh/peristiwa sejarah. (Contoh: "This man survived 5 assassination attempts and became a legendary leader. Who is he?")
-2. Scene 2 = THE CLUES. Berikan 2 petunjuk detail yang kuat, tapi JANGAN sebut nama tokoh atau kejadian sebenarnya. Biarkan penonton menebak.
-3. Scene 3 = THE CLIFFHANGER. JANGAN beri jawaban! Katakan persis seperti ini atau variasinya: "Think you know the answer? Comment your guess below, and come back tomorrow for the full story and the big reveal!"
-- Nada: Sangat penasaran, menggantung, memancing audiens untuk kembali besok."""
+        character_block = (
+            "Maskot Cal ada di tengah-bawah layar. Gambar latar HARUS: cinematic, mysterious, historical illustration style, "
+            "NO text, sisakan ruang kosong di tengah-bawah. Latar boleh memberi nuansa era, tapi JANGAN menampilkan "
+            "lokasi/bangunan/benda ikonik yang langsung membongkar jawabannya.\n"
+        )
+        image_rule = "cinematic, mysterious, atmospheric historical background hinting at the era only, no famous landmark, empty space at lower center, no text"
+        era_block = ""
+        era_fields = '  "era_setting": "suasana umum era itu (cahaya, warna, material) tanpa nama tempat/orang/landmark, bahasa Inggris, maks 15 kata",\n'
+        era_story = ""
+        title_rule = "3-7 kata teka-teki yang MENGGANTUNG, tanpa tahun, tanpa nama tokoh/tempat/peristiwa yang menjadi jawaban"
+        desc_rule = " (JANGAN membocorkan jawaban, tanpa nama tokoh dan tanpa tahun)"
+        mid = max(n - 2, 1)
+        custom_structure = f"""STRUKTUR NASKAH (HISTORICAL TRIVIA - CLIFFHANGER), tepat {n} scenes:
+1. Scene 1 = THE CHALLENGE. Ajukan pertanyaan mengejutkan tentang tokoh/peristiwa sejarah.
+   (Contoh: "This man survived five assassination attempts and became a legend. Who is he?")
+2. Scene 2 sampai {n - 1} = THE CLUES ({mid} scene, satu petunjuk kuat per scene, makin spesifik). 
+3. Scene {n} = THE CLIFFHANGER. JANGAN beri jawaban! Katakan persis atau variasinya:
+   "Think you know the answer? Comment your guess below, and come back tomorrow for the big reveal!"
+ATURAN ANTI-SPOILER (WAJIB): di narasi, judul, deskripsi, tags, dan image_prompt JANGAN menyebut nama tokoh,
+nama peristiwa/tempat kunci, atau tahun persis. Boleh menyebut abad/dekade secara kasar saja.
+- Nada: sangat penasaran, menggantung, memancing audiens kembali besok."""
     else:
-        character_block = "Maskot channel (kalender kecil bernama Cal) ditempel di tengah-bawah layar oleh editor video. Setiap image_prompt HANYA melukiskan LATAR/pemandangan. JANGAN ada tokoh, wajah, atau kerumunan di depan; sisakan ruang kosong di tengah-bawah gambar.\n"
+        character_block = (
+            "Maskot channel (kalender kecil bernama Cal) ditempel di tengah-bawah layar oleh editor video. "
+            "Setiap image_prompt HANYA melukiskan LATAR/pemandangan. JANGAN ada tokoh, wajah, atau kerumunan di depan; "
+            "sisakan ruang kosong di tengah-bawah gambar.\n"
+        )
         image_rule = "hanya latar era itu, tanpa tokoh/wajah, ruang kosong di tengah-bawah"
-        year = topic.get("year")
         if year:
             era_block = f"TAHUN KEJADIAN: {year}. Semua visual HARUS terasa seperti era dan lokasi kejadian itu.\n"
             era_fields = '  "era_setting": "suasana/latar era itu, bahasa Inggris, maks 20 kata",\n'
             era_story = f"- Bawa penonton MERASAKAN suasana tahun {year}.\n"
         else:
             era_block, era_fields, era_story = "", "", ""
-        custom_structure = """STRUKTUR NASKAH (ikuti urutan scenes):
+        title_rule = "3-7 kata pemicu rasa penasaran, tanpa tahun, tanpa tanda kutip"
+        if cfg.get("is_answer"):
+            custom_structure = """STRUKTUR NASKAH (JAWABAN TEBAK-TEBAKAN KEMARIN):
+1. Scene 1 = REVEAL, maksimal 14 kata. Buka dengan "Yesterday's mystery..." lalu langsung sebut jawabannya (nama tokoh/peristiwa).
+2. Scene tengah = cerita lengkap: fakta inti, konteks, kenapa petunjuk kemarin cocok, dan kenapa ini penting.
+3. Scene terakhir = opini/prediksi singkat + ajakan komentar berupa pertanyaan ("Did you guess it?")."""
+        else:
+            custom_structure = """STRUKTUR NASKAH (ikuti urutan scenes):
 1. Scene 1 = HOOK, maksimal 12 kata, memancing rasa penasaran dalam 2 detik.
 2. Scene tengah = fakta inti + konteks + "kenapa ini penting".
 3. Scene terakhir = opini/prediksi singkat + ajakan komentar berupa pertanyaan."""
@@ -182,18 +245,20 @@ def generate(topic: dict, cfg: dict) -> dict:
         niche=cfg.get("niche", ""), angle=cfg.get("angle", ""), topic=topic["title"],
         tags=", ".join(topic.get("tags", [])),
         facts_block=(f'DASAR FAKTA: {topic["facts"]}\n' if topic.get("facts") else ""),
-        character_block=character_block, image_rule=image_rule, n=cfg["scenes"],
+        character_block=character_block, image_rule=image_rule, n=n,
+        title_rule=title_rule, desc_rule=desc_rule,
     )
 
     data = None
     for provider in (_gemini, _groq, _cloudflare_text):
         text = provider(prompt)
-        if not text: continue
+        if not text:
+            continue
         try:
             data = _parse(text)
             assert data.get("scenes"), "tanpa scenes"
             break
-        except Exception as e:
+        except Exception as e:  # noqa: BLE001
             print(f"Balasan {provider.__name__} tidak valid:", e)
             data = None
     if not data:
@@ -201,15 +266,16 @@ def generate(topic: dict, cfg: dict) -> dict:
 
     data["title"] = make_title(data.get("hook_title") or data.get("title") or topic["title"], topic)
     setting = (data.get("era_setting") or "").strip()
-    
+
     if mode == "history_trivia":
         style = "cinematic historical illustration, mysterious lighting, highly detailed, no people in foreground, empty space at lower center, no text"
     else:
         style = "flat vector comic style, bold outlines, wide shot, no people in foreground, empty space at lower center, no text"
-    
+
     for sc in data["scenes"]:
         parts = [sc["image_prompt"]]
-        if setting: parts.append(f"Era setting: {setting}")
+        if setting:
+            parts.append(f"Era setting: {setting}")
         parts.append(style)
         sc["image_prompt"] = ". ".join(parts)
     return data

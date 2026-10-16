@@ -1,4 +1,4 @@
-"""Pipeline: trending -> naskah -> gambar -> narasi -> video -> upload."""
+"""Pipeline: topik -> naskah -> gambar -> narasi -> video -> upload (bisa beberapa profil per run)."""
 import datetime as dt
 import json
 import os
@@ -27,7 +27,7 @@ def write_report(lines: list) -> None:
 def _process_one_profile(profile: dict, cfg: dict, tz, force: bool) -> str:
     merged_cfg = {**cfg, **profile}
     pid = merged_cfg.get("id", "default")
-    
+
     print(f"\n{'='*60}\n🚀 MEMULAI MODE: {pid.upper()}\n{'='*60}")
 
     source_type = merged_cfg.get("source", "history")
@@ -39,6 +39,7 @@ def _process_one_profile(profile: dict, cfg: dict, tz, force: bool) -> str:
         if pending:
             topic = pending
             used_pending_trivia = True
+            merged_cfg["is_answer"] = True
             print(f"🧠 [{pid}] Menggunakan JAWABAN trivia kemarin: {topic.get('title', 'Unknown')[:60]}...")
         else:
             print(f"⚠️ [{pid}] Tidak ada trivia kemarin. Mengambil topik history acak.")
@@ -60,22 +61,34 @@ def _process_one_profile(profile: dict, cfg: dict, tz, force: bool) -> str:
     if not topic:
         return f"[{pid}] Topik kosong"
 
-    data = script_gen.generate(topic, merged_cfg)
+    is_trivia = pid == "history_trivia"
+    year = topic.get("year")
+    date_label = topic.get("date_label") or dt.datetime.now(tz).strftime("%b %d")
+
+    # Trivia TIDAK boleh membocorkan jawaban: judul hanya memuat tanggal (tanpa tahun) dan tahun tidak ditampilkan.
+    script_topic = topic
+    if is_trivia:
+        script_topic = {**topic, "date_label": date_label.split(",")[0].strip()}
+    data = script_gen.generate(script_topic, merged_cfg)
+
     out = os.path.join(OUT_DIR, pid)
     os.makedirs(out, exist_ok=True)
 
-    year = topic.get("year")
     era = mascot.era_for_year(year) if year else "modern"
-    date_label = topic.get("date_label") or dt.datetime.now(tz).strftime("%b %d")
     cal = mascot.prepare(era, date_label, os.path.join(out, "cal"))
     print(f"[{pid}] Era Cal: {era}")
+
+    # Blacklist provider (Cloudflare/Pollinations) SENGAJA dibawa ke profil berikutnya (modul images sama).
+    # Tapi gambar sukses terakhir harus dilupakan: latar profil lain beda topik/era.
+    images.LAST_GOOD_IMAGE = None
 
     clips = []
     for i, sc in enumerate(data["scenes"]):
         img, aud, clip = (os.path.join(out, f"s{i}.{e}") for e in ("png", "mp3", "mp4"))
         images.make_image(sc["image_prompt"], img, merged_cfg["width"], merged_cfg["height"])
         tts.make_voice(sc["narration"], merged_cfg["voice"], aud)
-        video.make_clip(img, aud, clip, merged_cfg["width"], merged_cfg["height"], sc["narration"], cal, year)
+        video.make_clip(img, aud, clip, merged_cfg["width"], merged_cfg["height"], sc["narration"], cal,
+                        None if is_trivia else year)
         clips.append(clip)
         print(f"[{pid}] Scene {i + 1}/{len(data['scenes'])} selesai")
 
@@ -90,7 +103,7 @@ def _process_one_profile(profile: dict, cfg: dict, tz, force: bool) -> str:
         db.clear_pending_trivia()
         print(f"🧹 [{pid}] Pending trivia di-clear (karena upload sukses).")
 
-    if pid == "history_trivia":
+    if is_trivia:
         db.save_pending_trivia(topic)
 
     if upload_facebook.enabled():
@@ -130,37 +143,30 @@ def main() -> int:
                      "voice": cfg.get("voice", "en_US-ryan-high")}]
 
     results = []
-    for profile in profiles:
+    for n, profile in enumerate(profiles):
         pid = profile.get("id", "default")
         if db.posted_today(cfg["country"], tz) >= cfg["max_posts_per_day"] and not force:
             print("Kuota harian tercapai. Stop.")
             results.append(f"[{pid}] Kuota tercapai")
             continue
-            
+
         try:
-            result = _process_one_profile(profile, cfg, tz, force)
-            results.append(result)
-            
-            # ⭐ LOGIKA BARU: Jika history_fact gagal karena batas upload, HENTIKAN SEMUA.
-            if pid == "history_fact" and "ERROR" in result and "uploadLimitExceeded" in result:
-                print("\n⛔ BATAS UPLOAD YOUTUBE TERCAPAI. Menghentikan pipeline untuk menghemat resource.")
-                results.append("[history_trivia] DIBATALKAN: Batas upload YouTube tercapai di mode sebelumnya.")
-                break
-                
-        except Exception as e:
+            results.append(_process_one_profile(profile, cfg, tz, force))
+        except Exception as e:  # noqa: BLE001
             tb = traceback.format_exc()
             root_cause = tb.strip().split("\n")[-1]
             print(f"\n❌ GAGAL di mode {pid}: {root_cause}")
             results.append(f"[{pid}] ERROR: {root_cause}")
-            
-            # ⭐ LOGIKA BARU: Tangkap exception upload limit juga
-            if "uploadLimitExceeded" in root_cause:
+
+            # Batas upload YouTube berlaku untuk seluruh channel: profil berikutnya pasti gagal juga.
+            if "uploadLimitExceeded" in root_cause or "exceeded the number of videos" in root_cause:
                 print("\n⛔ BATAS UPLOAD YOUTUBE TERCAPAI. Menghentikan pipeline untuk menghemat resource.")
-                results.append("[history_trivia] DIBATALKAN: Batas upload YouTube tercapai.")
+                for later in profiles[n + 1:]:
+                    results.append(f"[{later.get('id', 'default')}] DIBATALKAN: batas upload YouTube tercapai.")
                 break
 
     write_report(results)
-    
+
     ok_count = sum(1 for r in results if "https://youtube.com/shorts/" in r)
     print(f"\n🏁 SELESAI. Total video sukses: {ok_count}/{len(profiles)}")
     return 0

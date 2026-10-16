@@ -1,23 +1,32 @@
-"""Gambar per scene: Cloudflare -> Hugging Face -> Pollinations -> Fallback Lokal (Pillow)."""
+"""Gambar latar per scene: Cloudflare -> Pollinations -> pakai ulang gambar sukses -> latar lokal (tanpa teks).
+
+Hugging Face SUDAH DIHAPUS: endpoint lama api-inference.huggingface.co sudah mati (domain tidak ada),
+dan FLUX.1-schnell dicabut dari layanan HF; akun gratis juga tidak punya kredit bulanan.
+"""
 import base64
+import hashlib
 import os
 import random
+import shutil
 import time
 import urllib.parse
 import requests
-from PIL import Image, ImageDraw, ImageFont
+from PIL import Image, ImageDraw
 
 STYLE = "flat comic illustration, vibrant colors, clean lines, no text, no watermark, "
 CF_MODEL = os.environ.get("CF_IMAGE_MODEL", "@cf/black-forest-labs/flux-1-schnell")
-HF_MODEL = "black-forest-labs/FLUX.1-schnell"
 
 CF_WAITS = [10, 30]
-HF_WAITS = [10, 20]
-POLL_WAITS = [15, 30]
+POLL_WAITS = [45, 45]   # Pollinations anonim: ~1 gambar per 40 detik
+POLL_GAP = 45
+MAX_GIVEUPS = 2         # provider yang menyerah 2x berturut-turut ikut di-blacklist
 
-# ⭐ STATE GLOBAL: Ingat provider yang berhasil & yang sudah gagal permanen
+# STATE GLOBAL: ingat provider yang berhasil, yang sudah limit, dan gambar sukses terakhir
 LAST_SUCCESSFUL_PROVIDER = None
-FAILED_PROVIDERS: set = set()  # Provider yang sudah limit/auth, jangan di-hit lagi
+FAILED_PROVIDERS: set = set()
+LAST_GOOD_IMAGE = None
+LAST_POLL_TS = 0.0
+GIVEUPS: dict = {}
 
 
 def _cloudflare(prompt: str, path: str) -> None:
@@ -44,76 +53,56 @@ def _cloudflare(prompt: str, path: str) -> None:
         f.write(data)
 
 
-def _huggingface(prompt: str, path: str) -> None:
-    token = os.environ.get("HF_TOKEN")
-    if not token:
-        raise RuntimeError("HF_TOKEN TIDAK DITEMUKAN di GitHub Secrets!")
-
-    api_url = f"https://api-inference.huggingface.co/models/{HF_MODEL}"
-    headers = {"Authorization": f"Bearer {token}"}
-    payload = {"inputs": STYLE + prompt, "parameters": {"num_inference_steps": 4}}
-
-    r = requests.post(api_url, headers=headers, json=payload, timeout=90)
-
-    if r.status_code == 503:
-        est = r.json().get("estimated_time", 15)
-        raise RuntimeError(f"HF Model sedang loading, estimasi {est} detik")
-    if r.status_code == 401:
-        raise RuntimeError("HF Token tidak valid atau expired")
-    if r.status_code == 429:
-        raise RuntimeError("Hugging Face rate limit/kuota harian tercapai")
-    if r.status_code != 200:
-        raise RuntimeError(f"HF HTTP {r.status_code}: {r.text[:150]}")
-
-    with open(path, "wb") as f:
-        f.write(r.content)
-
-
 def _pollinations(prompt: str, path: str, width: int, height: int) -> None:
+    global LAST_POLL_TS
+    gap = POLL_GAP - (time.time() - LAST_POLL_TS)
+    if gap > 0:  # patuhi batas ~1 gambar/40 detik supaya tidak kena 402
+        print(f"⏳ Pollinations: jeda {gap:.0f} detik (batas anonim)...", flush=True)
+        time.sleep(gap)
     seed = random.randint(1, 999999)
     safe_prompt = urllib.parse.quote(STYLE + prompt)
     url = f"https://image.pollinations.ai/prompt/{safe_prompt}?width={width}&height={height}&nologo=true&seed={seed}&noCache=true"
 
     headers = {"User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36"}
     r = requests.get(url, headers=headers, timeout=90)
+    LAST_POLL_TS = time.time()
 
+    if r.status_code == 402:  # batas laju sementara, BUKAN gagal permanen
+        print("ℹ️ Pollinations 402:", r.text[:300], flush=True)
+        raise RuntimeError("Pollinations kena batas laju, coba lagi nanti")
     if r.status_code == 200 and r.headers.get("content-type", "").startswith("image"):
         with open(path, "wb") as f:
             f.write(r.content)
         return
-    raise RuntimeError(f"Pollinations HTTP {r.status_code}: {r.text[:100]}")
+    raise RuntimeError(f"Pollinations HTTP {r.status_code}: {r.text[:300]}")
 
 
-def _fallback_pillow(prompt: str, path: str, width: int, height: int) -> None:
-    print("🎨 Menggunakan fallback gambar lokal (Pillow)...", flush=True)
-    img = Image.new("RGB", (width, height), color=(30, 30, 40))
-    draw = ImageDraw.Draw(img)
-
-    try:
-        font = ImageFont.truetype("/usr/share/fonts/truetype/dejavu/DejaVuSans-Bold.ttf", 40)
-    except OSError:
-        font = ImageFont.load_default()
-
+def _local_background(prompt: str, path: str, width: int, height: int) -> None:
+    """Latar buatan sendiri (gradasi + siluet kota/bukit), TANPA teks. Warna acak tapi tetap per prompt."""
+    print("🎨 Membuat latar lokal (tanpa teks)...", flush=True)
+    rnd = random.Random(int(hashlib.md5(prompt.encode()).hexdigest(), 16))
+    hue = [(48, 70, 130), (120, 60, 90), (40, 100, 110), (130, 90, 50), (70, 60, 120)]
+    top = rnd.choice(hue)
+    bottom = tuple(min(255, c + 110) for c in top)
+    img = Image.new("RGB", (width, height))
+    d = ImageDraw.Draw(img)
     for y in range(height):
-        r_val = int(30 + (y / height) * 40)
-        draw.line([(0, y), (width, y)], fill=(r_val, r_val, r_val + 20))
-
-    short_prompt = (STYLE + prompt)[:150] + "..."
-    words = short_prompt.split()
-    lines, current = [], ""
-    for word in words:
-        if len(current) + len(word) < 40:
-            current += word + " "
-        else:
-            lines.append(current)
-            current = word + " "
-    lines.append(current)
-
-    y_text = height // 2 - (len(lines) * 25)
-    for line in lines:
-        draw.text((width // 2, y_text), line.strip(), font=font, fill=(255, 255, 255), anchor="mm")
-        y_text += 50
-
+        k = y / height
+        d.line([(0, y), (width, y)], fill=tuple(int(top[i] + (bottom[i] - top[i]) * k) for i in range(3)))
+    # matahari/bulan besar
+    r = width // 5
+    cx, cy = rnd.randint(width // 4, width * 3 // 4), int(height * 0.28)
+    d.ellipse([cx - r, cy - r, cx + r, cy + r], fill=tuple(min(255, c + 150) for c in top))
+    # dua lapis siluet bangunan di sepertiga bawah
+    for layer, shade in enumerate((0.55, 0.35)):
+        base = int(height * (0.70 + layer * 0.08))
+        col = tuple(int(c * shade) for c in top)
+        x = 0
+        while x < width:
+            bw = rnd.randint(width // 14, width // 6)
+            bh = rnd.randint(height // 14, height // 5)
+            d.rectangle([x, base - bh, x + bw, height], fill=col)
+            x += bw
     img.save(path)
 
 
@@ -136,59 +125,60 @@ def _try(fn, waits, name: str) -> bool:
             fn()
             print(f"✅ {name} berhasil.", flush=True)
             LAST_SUCCESSFUL_PROVIDER = name
+            GIVEUPS[name] = 0
             return True
         except Exception as e:  # noqa: BLE001
-            last = str(e)[:200]
+            last = str(e)[:300]
             print(f"⚠️ {name} error: {last}", flush=True)
 
             if _is_hard_fail(last):
                 print(f"⛔ {name} gagal permanen (kuota/auth). Skip retry & masuk blacklist.", flush=True)
-                FAILED_PROVIDERS.add(name)  # ⭐ MASUKKAN KE BLACKLIST
-                # Reset prioritas jika provider ini yang sebelumnya sukses
+                FAILED_PROVIDERS.add(name)
                 if LAST_SUCCESSFUL_PROVIDER == name:
                     LAST_SUCCESSFUL_PROVIDER = None
                 return False
 
     print(f"❌ {name} menyerah setelah semua retry.", flush=True)
+    GIVEUPS[name] = GIVEUPS.get(name, 0) + 1
+    if GIVEUPS[name] >= MAX_GIVEUPS:
+        print(f"⛔ {name} menyerah {GIVEUPS[name]}x berturut-turut, masuk blacklist.", flush=True)
+        FAILED_PROVIDERS.add(name)
     return False
 
 
 def make_image(prompt: str, path: str, width: int, height: int) -> None:
-    global LAST_SUCCESSFUL_PROVIDER
+    global LAST_GOOD_IMAGE
 
-    # 1. Susun daftar penyedia yang tersedia + log jika tidak diset
     providers = []
     if os.environ.get("CF_ACCOUNT_ID") and os.environ.get("CF_API_TOKEN"):
         providers.append(("Cloudflare", lambda: _cloudflare(prompt, path), CF_WAITS))
     else:
         print("ℹ️ Cloudflare dilewati: CF_ACCOUNT_ID/CF_API_TOKEN tidak diset.", flush=True)
-
-    if os.environ.get("HF_TOKEN"):
-        providers.append(("HuggingFace", lambda: _huggingface(prompt, path), HF_WAITS))
-    else:
-        print("ℹ️ HuggingFace dilewati: HF_TOKEN tidak diset di GitHub Secrets.", flush=True)
-
     providers.append(("Pollinations", lambda: _pollinations(prompt, path, width, height), POLL_WAITS))
 
-    # 2. ⭐ FILTER: Buang provider yang sudah di-blacklist (sudah limit hari ini)
-    original_count = len(providers)
+    # Buang provider yang sudah limit hari ini
+    skipped = [n for (n, _, _) in providers if n in FAILED_PROVIDERS]
     providers = [(n, f, w) for (n, f, w) in providers if n not in FAILED_PROVIDERS]
-    if len(providers) < original_count:
-        print(f"⚠️ Provider di-blacklist (sudah limit): {FAILED_PROVIDERS}", flush=True)
+    if skipped:
+        print(f"⚠️ Dilewati (sudah limit): {skipped}", flush=True)
 
-    # 3. ⭐ PRIORITASKAN API TERAKHIR YANG BERHASIL
+    # Prioritaskan provider yang terakhir berhasil
     if LAST_SUCCESSFUL_PROVIDER:
-        for i, (name, fn, waits) in enumerate(providers):
+        for i, (name, _, _) in enumerate(providers):
             if name == LAST_SUCCESSFUL_PROVIDER:
                 providers.insert(0, providers.pop(i))
-                print(f"⚡ Memprioritaskan {LAST_SUCCESSFUL_PROVIDER} (berhasil sebelumnya).", flush=True)
                 break
 
-    # 4. Coba satu per satu
     for name, fn, waits in providers:
         if _try(fn, waits, name):
+            LAST_GOOD_IMAGE = path
             return
 
-    # 5. Fallback terakhir
-    print("⚠️ Semua AI gambar gagal. Menggunakan fallback lokal...", flush=True)
-    _fallback_pillow(prompt, path, width, height)
+    # Semua AI gagal: pakai ulang gambar sukses sebelumnya (latar era yang sama), Ken Burns tetap bergerak
+    if LAST_GOOD_IMAGE and os.path.exists(LAST_GOOD_IMAGE):
+        print("♻️ Semua AI gambar gagal. Memakai ulang gambar sukses sebelumnya.", flush=True)
+        shutil.copyfile(LAST_GOOD_IMAGE, path)
+        return
+
+    print("⚠️ Semua AI gambar gagal. Memakai latar lokal...", flush=True)
+    _local_background(prompt, path, width, height)
