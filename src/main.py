@@ -1,5 +1,4 @@
-"""Pipeline: trending -> naskah -> gambar -> narasi -> video -> upload.
-Mendukung multi-profile dengan state Supabase (Trivia hari ini = Fact besok)."""
+"""Pipeline: trending -> naskah -> gambar -> narasi -> video -> upload."""
 import datetime as dt
 import json
 import os
@@ -20,14 +19,12 @@ def load_cfg() -> dict:
 
 
 def write_report(lines: list) -> None:
-    """Tulis laporan sederhana ke file untuk dikirim via email."""
     os.makedirs(OUT_DIR, exist_ok=True)
     with open(REPORT_FILE, "w", encoding="utf-8") as f:
         f.write("\n".join(lines))
 
 
 def _process_one_profile(profile: dict, cfg: dict, tz, force: bool) -> str:
-    """Return link video jika sukses, atau error message jika gagal."""
     merged_cfg = {**cfg, **profile}
     pid = merged_cfg.get("id", "default")
     
@@ -35,7 +32,7 @@ def _process_one_profile(profile: dict, cfg: dict, tz, force: bool) -> str:
 
     source_type = merged_cfg.get("source", "history")
     topic = None
-    used_pending_trivia = False  # ⭐ FLAG: Hanya clear DB jika upload sukses
+    used_pending_trivia = False
 
     if pid == "history_fact":
         pending = db.get_pending_trivia()
@@ -63,7 +60,6 @@ def _process_one_profile(profile: dict, cfg: dict, tz, force: bool) -> str:
     if not topic:
         return f"[{pid}] Topik kosong"
 
-    # Generate Script (Log detail akan muncul dari dalam script_gen.py)
     data = script_gen.generate(topic, merged_cfg)
     out = os.path.join(OUT_DIR, pid)
     os.makedirs(out, exist_ok=True)
@@ -86,12 +82,10 @@ def _process_one_profile(profile: dict, cfg: dict, tz, force: bool) -> str:
     final = os.path.join(out, "final.mp4")
     video.concat(clips, os.path.join(out, "list.txt"), final)
 
-    # ⭐ UPLOAD: Jika baris ini gagal (Exception), kode di bawahnya TIDAK akan jalan.
     vid = upload_youtube.upload(final, data, merged_cfg.get("privacy", "private"))
     db.log_post(merged_cfg["country"], topic["id"], data["title"], vid)
     print(f"[{pid}] ✅ Terupload: https://youtube.com/shorts/{vid}")
 
-    # ⭐ BARU SEKARANG AMAN: clear pending trivia & simpan trivia baru
     if used_pending_trivia:
         db.clear_pending_trivia()
         print(f"🧹 [{pid}] Pending trivia di-clear (karena upload sukses).")
@@ -142,17 +136,29 @@ def main() -> int:
             print("Kuota harian tercapai. Stop.")
             results.append(f"[{pid}] Kuota tercapai")
             continue
+            
         try:
             result = _process_one_profile(profile, cfg, tz, force)
             results.append(result)
+            
+            # ⭐ LOGIKA BARU: Jika history_fact gagal karena batas upload, HENTIKAN SEMUA.
+            if pid == "history_fact" and "ERROR" in result and "uploadLimitExceeded" in result:
+                print("\n⛔ BATAS UPLOAD YOUTUBE TERCAPAI. Menghentikan pipeline untuk menghemat resource.")
+                results.append("[history_trivia] DIBATALKAN: Batas upload YouTube tercapai di mode sebelumnya.")
+                break
+                
         except Exception as e:
-            # Ambil root cause (baris terakhir dari traceback)
             tb = traceback.format_exc()
             root_cause = tb.strip().split("\n")[-1]
             print(f"\n❌ GAGAL di mode {pid}: {root_cause}")
             results.append(f"[{pid}] ERROR: {root_cause}")
+            
+            # ⭐ LOGIKA BARU: Tangkap exception upload limit juga
+            if "uploadLimitExceeded" in root_cause:
+                print("\n⛔ BATAS UPLOAD YOUTUBE TERCAPAI. Menghentikan pipeline untuk menghemat resource.")
+                results.append("[history_trivia] DIBATALKAN: Batas upload YouTube tercapai.")
+                break
 
-    # Tulis laporan ringkas untuk email
     write_report(results)
     
     ok_count = sum(1 for r in results if "https://youtube.com/shorts/" in r)
