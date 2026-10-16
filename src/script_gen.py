@@ -79,6 +79,16 @@ def make_title(hook: str, topic: dict) -> str:
     return hook + tail
 
 
+# Penyedia teks yang gagal PERMANEN di run ini (kuota harian habis / model tidak ada / kunci salah).
+# Disimpan di level modul, jadi profil berikutnya di run yang sama tidak memanggilnya lagi.
+DEAD: set = set()
+
+# Urutan kesukaan model Groq. llama-3.3-70b-versatile sudah dipensiunkan Groq (16 Agustus 2026).
+GROQ_PREFER = ["openai/gpt-oss-120b", "qwen/qwen3.8-27b", "openai/gpt-oss-20b",
+               "llama-3.3-70b-versatile", "llama-3.1-8b-instant"]
+GROQ_SKIP = ("whisper", "guard", "tts", "orpheus", "compound", "playai", "distil", "embed")
+
+
 def _gemini(prompt: str):
     key = os.environ.get("GEMINI_API_KEY")
     if not key:
@@ -92,12 +102,17 @@ def _gemini(prompt: str):
     except Exception as e:  # noqa: BLE001
         print("Gemini list model gagal:", e)
         return None
-    for model in models:
-        print("Model Gemini:", model)
-        for wait in [0, 20]:
-            if wait:
-                print(f"Gemini sibuk, tunggu {wait}s...")
-                time.sleep(wait)
+    bad: set = set()
+    # 3 ronde sabar: 503 = server Google sedang penuh, biasanya reda dalam hitungan menit.
+    for rnd, wait in enumerate([0, 30, 60]):
+        live = [m for m in models if m not in bad]
+        if not live:
+            break
+        if wait:
+            print(f"Gemini sibuk, ronde {rnd + 1}: tunggu {wait}s...")
+            time.sleep(wait)
+        for model in live:
+            print("Model Gemini:", model)
             try:
                 r = requests.post(GEN_URL.format(m=model), params={"key": key}, json=body, timeout=120)
             except Exception as e:  # noqa: BLE001
@@ -108,52 +123,92 @@ def _gemini(prompt: str):
                 continue
             if r.status_code != 200:
                 print("Gemini status", r.status_code, r.text[:200])
-                break
+                bad.add(model)
+                continue
             try:
                 text = r.json()["candidates"][0]["content"]["parts"][0]["text"]
                 print(f"Naskah dari: Gemini ({model})")
                 return text
             except (KeyError, IndexError):
                 print("Gemini balasan kosong")
-                break
+                bad.add(model)
     return None
+
+
+def groq_models(key: str) -> list[str]:
+    forced = os.environ.get("GROQ_MODEL")
+    if forced:
+        return [forced]
+    ids: list[str] = []
+    try:
+        r = requests.get("https://api.groq.com/openai/v1/models",
+                         headers={"Authorization": f"Bearer {key}"}, timeout=30)
+        r.raise_for_status()
+        ids = [m["id"] for m in r.json().get("data", []) if m.get("active", True)]
+    except Exception as e:  # noqa: BLE001
+        print("Groq list model gagal:", str(e)[:150])
+    ids = [i for i in ids if not any(x in i for x in GROQ_SKIP)]
+    ordered = [m for m in GROQ_PREFER if m in ids]
+    rest = [i for i in ids if i not in ordered and any(k in i for k in ("llama", "qwen", "gpt-oss"))]
+    return (ordered + rest)[:3] or GROQ_PREFER[:1]
 
 
 def _groq(prompt: str):
     key = os.environ.get("GROQ_API_KEY")
-    if not key:
+    if not key or "groq" in DEAD:
         return None
-    model = os.environ.get("GROQ_MODEL", "llama-3.3-70b-versatile")
-    print("Cadangan: Groq", model)
-    for wait in [0, 15]:
-        if wait:
-            time.sleep(wait)
-        try:
-            r = requests.post(
-                "https://api.groq.com/openai/v1/chat/completions",
-                headers={"Authorization": f"Bearer {key}"},
-                json={
-                    "model": model, "messages": [{"role": "user", "content": prompt}],
-                    "response_format": {"type": "json_object"}, "temperature": 0.7,
-                }, timeout=120,
-            )
-        except Exception as e:  # noqa: BLE001
-            print("Groq error jaringan:", str(e)[:150])
-            continue
-        if r.status_code in RETRY_STATUS:
-            print("Groq status", r.status_code)
-            continue
-        if r.status_code != 200:
-            print("Groq status", r.status_code, r.text[:200])
-            return None
-        print(f"Naskah dari: Groq ({model})")
-        return r.json()["choices"][0]["message"]["content"]
+    url = "https://api.groq.com/openai/v1/chat/completions"
+    headers = {"Authorization": f"Bearer {key}"}
+    models = groq_models(key)
+    missing = 0
+    for model in models:
+        print("Cadangan: Groq", model)
+        full = {"model": model, "messages": [{"role": "user", "content": prompt}],
+                "response_format": {"type": "json_object"}, "temperature": 0.7, "max_tokens": 4096}
+        if "gpt-oss" in model:
+            full["reasoning_effort"] = "low"
+        plain = {"model": model, "messages": [{"role": "user", "content": prompt}],
+                 "temperature": 0.7, "max_tokens": 4096}
+        for wait in [0, 15]:
+            if wait:
+                time.sleep(wait)
+            try:
+                r = requests.post(url, headers=headers, json=full, timeout=120)
+                if r.status_code == 400:  # model tidak mendukung JSON mode/parameter tertentu -> ulangi polos
+                    r = requests.post(url, headers=headers, json=plain, timeout=120)
+            except Exception as e:  # noqa: BLE001
+                print("Groq error jaringan:", str(e)[:150])
+                continue
+            if r.status_code in RETRY_STATUS:
+                print("Groq status", r.status_code)
+                continue
+            if r.status_code in (401, 403):
+                print("Groq status", r.status_code, r.text[:200], "-> kunci/akses ditolak, dilewati")
+                DEAD.add("groq")
+                return None
+            if r.status_code == 404:
+                print("Groq status 404, model tidak ada:", model)
+                missing += 1
+                break
+            if r.status_code != 200:
+                print("Groq status", r.status_code, r.text[:200])
+                break
+            try:
+                content = r.json()["choices"][0]["message"]["content"]
+            except (KeyError, IndexError):
+                print("Groq balasan kosong")
+                break
+            print(f"Naskah dari: Groq ({model})")
+            return content
+    if missing == len(models):
+        print("Groq: semua model tidak tersedia, dilewati sampai run berikutnya.")
+        DEAD.add("groq")
     return None
 
 
 def _cloudflare_text(prompt: str):
     acc, tok = os.environ.get("CF_ACCOUNT_ID"), os.environ.get("CF_API_TOKEN")
-    if not acc or not tok:
+    if not acc or not tok or "cloudflare" in DEAD:
         return None
     model = os.environ.get("CF_TEXT_MODEL", "@cf/meta/llama-3.3-70b-instruct-fp8-fast")
     print("Cadangan: Cloudflare", model)
@@ -169,6 +224,13 @@ def _cloudflare_text(prompt: str):
         return None
     if r.status_code != 200:
         print("Cloudflare status", r.status_code, r.text[:200])
+        if r.status_code in (401, 403) or (r.status_code == 429 and "daily free allocation" in r.text):
+            DEAD.add("cloudflare")
+            try:  # kuota neurons dipakai bersama gambar: gambar juga jangan mencoba Cloudflare lagi
+                from . import images
+                images.FAILED_PROVIDERS.add("Cloudflare")
+            except Exception:  # noqa: BLE001
+                pass
         return None
     out = r.json().get("result", {}).get("response")
     print(f"Naskah dari: Cloudflare ({model})")
