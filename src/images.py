@@ -18,6 +18,7 @@ POLL_WAITS = [15, 30]
 # ⭐ INGAT API TERAKHIR YANG BERHASIL AGAR SCENE BERIKUTNYA LEBIH CEPAT
 LAST_SUCCESSFUL_PROVIDER = None
 
+
 def _cloudflare(prompt: str, path: str) -> None:
     acc = os.environ.get("CF_ACCOUNT_ID")
     tok = os.environ.get("CF_API_TOKEN")
@@ -134,7 +135,7 @@ def _try(fn, waits, name: str) -> bool:
         try:
             fn()
             print(f"✅ {name} berhasil.", flush=True)
-            LAST_SUCCESSFUL_PROVIDER = name # ⭐ SIMPAN PENYEDIA YANG BERHASIL
+            LAST_SUCCESSFUL_PROVIDER = name  # ⭐ SIMPAN PENYEDIA YANG BERHASIL
             return True
         except Exception as e:  # noqa: BLE001
             last = str(e)[:200]
@@ -164,7 +165,7 @@ def make_image(prompt: str, path: str, width: int, height: int) -> None:
         for i, (name, fn, waits) in enumerate(providers):
             if name == LAST_SUCCESSFUL_PROVIDER:
                 providers.insert(0, providers.pop(i))
-                print(f"⚡ Scene berikutnya memprioritaskan {LAST_SUCCESSFUL_PROVIDER} (berhasil sebelumnya).", flush=True
+                print(f"⚡ Scene berikutnya memprioritaskan {LAST_SUCCESSFUL_PROVIDER} (berhasil sebelumnya).", flush=True)
                 break
 
     # 3. Coba satu per satu
