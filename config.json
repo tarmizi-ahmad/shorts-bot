@@ -5,7 +5,7 @@
   "source": "history",
   "peak_hours": [12, 19],
   "max_posts_per_day": 2,
-  "privacy": "private",
+  "privacy": "public",
   "profiles": [
     {
       "id": "history_fact",

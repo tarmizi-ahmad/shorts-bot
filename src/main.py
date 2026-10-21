@@ -173,7 +173,7 @@ def main() -> int:
             print("\n⛔", msg)
             write_report([msg])
             write_summary("Run gagal: token YouTube", [msg.replace("\n", " ")])
-            notify.notify("❌ Shorts-ai: token YouTube bermasalah", [msg])
+            # Kegagalan diberitahukan lewat email GitHub (exit 1), bukan email bot.
             return 1
 
     profiles = cfg.get("profiles")
@@ -213,16 +213,14 @@ def main() -> int:
     ok_count = sum(1 for r in results if "https://youtube.com/shorts/" in r or "DRY-RUN video" in r)
     print(f"\n🏁 SELESAI. Total video sukses: {ok_count}/{len(profiles)}")
 
-    # Notifikasi hanya bila ada percobaan upload sungguhan (bukan skip / dry-run).
-    attempted = [r for r in results if "https://youtube.com/shorts/" in r or "ERROR" in r or "DIBATALKAN" in r]
-    if attempted and not dry_run:
-        up = sum(1 for r in results if "https://youtube.com/shorts/" in r)
+    # Email bot HANYA untuk video yang berhasil diupload (lengkap dengan link).
+    # Kegagalan sengaja tidak dikirim dari sini: run ditandai GAGAL (exit 1) dan GitHub yang mengirim email.
+    up = sum(1 for r in results if "https://youtube.com/shorts/" in r)
+    if up and not dry_run:
         if up == len(profiles):
             subject = f"✅ Shorts-ai: {up} video berhasil diupload"
-        elif up:
-            subject = f"⚠️ Shorts-ai: {up}/{len(profiles)} video berhasil diupload"
         else:
-            subject = "❌ Shorts-ai: tidak ada video yang terupload"
+            subject = f"⚠️ Shorts-ai: {up}/{len(profiles)} video berhasil diupload (sebagian gagal)"
         notify.notify(subject, results)
 
     # Kode keluar 1 bila ada profil yang error: run ditandai GAGAL di GitHub, sehingga email notifikasi terkirim.
