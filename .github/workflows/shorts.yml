@@ -2,7 +2,7 @@ name: shorts-bot
 
 on:
   schedule:
-    - cron: "5 * * * *"   # tiap jam; script sendiri cek jam ramai di config.json
+    - cron: "5 * * * *"   # tiap jam; gerbang di bawah membaca peak_hours dari config.json
   workflow_dispatch:
     inputs:
       force:
@@ -25,24 +25,52 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
+      # Gerbang: baca config.json dulu. Di luar jam ramai, semua langkah berat di bawah dilewati.
+      - name: Cek jam ramai (gerbang)
+        id: gate
+        env:
+          BYPASS: ${{ (github.event_name == 'workflow_dispatch' && (inputs.force || !inputs.upload_youtube)) && '1' || '0' }}
+        run: |
+          python3 - <<'PY'
+          import datetime as dt, json, os
+          from zoneinfo import ZoneInfo
+          cfg = json.load(open("config.json", encoding="utf-8"))
+          now = dt.datetime.now(ZoneInfo(cfg["timezone"]))
+          hours = cfg["peak_hours"]
+          bypass = os.environ.get("BYPASS") == "1"
+          run = bypass or now.hour in hours
+          msg = f"Jam {now.hour} ({cfg['timezone']}), jam ramai {hours}, bypass={bypass} -> {'JALAN' if run else 'LEWATI'}"
+          print(msg)
+          with open(os.environ["GITHUB_OUTPUT"], "a") as f:
+              f.write(f"run={'true' if run else 'false'}\n")
+          with open(os.environ["GITHUB_STEP_SUMMARY"], "a") as f:
+              f.write(("✅ " if run else "⏭️ ") + msg + "\n")
+          PY
+
       - uses: actions/setup-python@v5
+        if: steps.gate.outputs.run == 'true'
         with:
           python-version: "3.12"
           cache: pip
 
       - name: Install ffmpeg
+        if: steps.gate.outputs.run == 'true'
         run: |
           which ffmpeg || (sudo apt-get update && sudo apt-get install -y ffmpeg)
 
-      - run: pip install -r requirements.txt
+      - name: Install dependensi
+        if: steps.gate.outputs.run == 'true'
+        run: pip install -r requirements.txt
 
       - name: Cache suara Piper
+        if: steps.gate.outputs.run == 'true'
         uses: actions/cache@v4
         with:
           path: voices
           key: piper-voices-v1
 
       - name: Jalankan pipeline
+        if: steps.gate.outputs.run == 'true'
         env:
           FORCE: ${{ inputs.force && '1' || '0' }}
           UPLOAD_YOUTUBE: ${{ (github.event_name == 'workflow_dispatch' && !inputs.upload_youtube) && '0' || '1' }}
@@ -58,7 +86,6 @@ jobs:
           CF_API_TOKEN: ${{ secrets.CF_API_TOKEN }}
           FB_PAGE_ID: ${{ secrets.FB_PAGE_ID }}
           FB_PAGE_TOKEN: ${{ secrets.FB_PAGE_TOKEN }}
-          HF_TOKEN: ${{ secrets.HF_TOKEN }}
           SMTP_USER: ${{ secrets.SMTP_USER }}
           SMTP_PASSWORD: ${{ secrets.SMTP_PASSWORD }}
           NOTIFY_EMAIL: ${{ secrets.NOTIFY_EMAIL }}
@@ -67,7 +94,7 @@ jobs:
         run: python -u -m src.main
 
       - name: Simpan video (cadangan & hasil dry-run)
-        if: always()
+        if: always() && steps.gate.outputs.run == 'true'
         uses: actions/upload-artifact@v4
         with:
           name: video-${{ github.run_id }}
@@ -75,4 +102,4 @@ jobs:
             output/**/final.mp4
             output/report.txt
           if-no-files-found: ignore
-          retention-days: 7        
+          retention-days: 7

@@ -12,7 +12,9 @@ nav a.on,nav a:hover{background:rgba(255,255,255,.22)}
 main{max-width:720px;margin:-2rem auto 2rem;padding:0 1rem}
 .card{background:var(--card);border:1px solid var(--line);border-radius:16px;padding:1.4rem 1.5rem;margin-bottom:1rem;box-shadow:0 2px 10px rgba(20,30,60,.06)}
 h2{font-size:1.15rem;margin:0 0 .5rem}
-p{margin:.4rem 0}ul{margin:.4rem 0;padding-left:1.2rem}li{margin:.25rem 0}
+p{margin:.4rem 0}
+.card p,.card li,.step{text-align:justify;text-justify:inter-word;hyphens:auto;-webkit-hyphens:auto}
+ul{margin:.4rem 0;padding-left:1.2rem}li{margin:.25rem 0}
 a{color:var(--accent2)}
 code{background:var(--code);padding:.1rem .4rem;border-radius:6px;font-size:.88em;word-break:break-all}
 .muted{color:var(--muted);font-size:.9rem}
