@@ -7,8 +7,8 @@ from googleapiclient.http import MediaFileUpload
 SCOPES = ["https://www.googleapis.com/auth/youtube.upload"]
 
 
-def _service():
-    creds = Credentials(
+def _creds():
+    return Credentials(
         token=None,
         refresh_token=os.environ["YT_REFRESH_TOKEN"],
         client_id=os.environ["YT_CLIENT_ID"],
@@ -16,7 +16,16 @@ def _service():
         token_uri="https://oauth2.googleapis.com/token",
         scopes=SCOPES,
     )
-    return build("youtube", "v3", credentials=creds)
+
+
+def _service():
+    return build("youtube", "v3", credentials=_creds())
+
+
+def check_auth() -> None:
+    """Cek token YouTube SEBELUM membuat video. Raise RefreshError bila token kedaluwarsa/dicabut."""
+    from google.auth.transport.requests import Request
+    _creds().refresh(Request())
 
 
 def upload(path: str, meta: dict, privacy: str = "private") -> str:
