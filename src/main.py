@@ -6,7 +6,7 @@ import sys
 import traceback
 from zoneinfo import ZoneInfo
 
-from . import db, history, images, mascot, script_gen, trends, tts, upload_facebook, upload_youtube, video
+from . import db, history, images, mascot, notify, script_gen, trends, tts, upload_facebook, upload_youtube, video
 
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 OUT_DIR = os.path.join(ROOT, "output")
@@ -138,7 +138,7 @@ def _process_one_profile(profile: dict, cfg: dict, tz, force: bool) -> str:
         except Exception as e:  # noqa: BLE001
             print(f"[{pid}] Facebook gagal: {e}")
 
-    return f"https://youtube.com/shorts/{vid}"
+    return f"[{pid}] https://youtube.com/shorts/{vid} — {data['title']} (privacy: {merged_cfg.get('privacy', 'private')})"
 
 
 def main() -> int:
@@ -173,6 +173,7 @@ def main() -> int:
             print("\n⛔", msg)
             write_report([msg])
             write_summary("Run gagal: token YouTube", [msg.replace("\n", " ")])
+            notify.notify("❌ Shorts-ai: token YouTube bermasalah", [msg])
             return 1
 
     profiles = cfg.get("profiles")
@@ -211,6 +212,19 @@ def main() -> int:
 
     ok_count = sum(1 for r in results if "https://youtube.com/shorts/" in r or "DRY-RUN video" in r)
     print(f"\n🏁 SELESAI. Total video sukses: {ok_count}/{len(profiles)}")
+
+    # Notifikasi hanya bila ada percobaan upload sungguhan (bukan skip / dry-run).
+    attempted = [r for r in results if "https://youtube.com/shorts/" in r or "ERROR" in r or "DIBATALKAN" in r]
+    if attempted and not dry_run:
+        up = sum(1 for r in results if "https://youtube.com/shorts/" in r)
+        if up == len(profiles):
+            subject = f"✅ Shorts-ai: {up} video berhasil diupload"
+        elif up:
+            subject = f"⚠️ Shorts-ai: {up}/{len(profiles)} video berhasil diupload"
+        else:
+            subject = "❌ Shorts-ai: tidak ada video yang terupload"
+        notify.notify(subject, results)
+
     # Kode keluar 1 bila ada profil yang error: run ditandai GAGAL di GitHub, sehingga email notifikasi terkirim.
     failed = [r for r in results if "ERROR" in r or "DIBATALKAN" in r]
     if failed:
