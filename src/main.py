@@ -27,6 +27,22 @@ def write_report(lines: list) -> None:
         f.write("\n".join(lines))
 
 
+def write_summary(title: str, results: list) -> None:
+    """Ringkasan di halaman run GitHub Actions (mudah dibaca dari HP)."""
+    path = os.environ.get("GITHUB_STEP_SUMMARY")
+    if not path:
+        return
+    lines = [f"## {title}", ""]
+    for r in results:
+        bad = "ERROR" in r or "DIBATALKAN" in r or "BERMASALAH" in r
+        lines.append(f"- {'❌' if bad else '✅'} {r}")
+    try:
+        with open(path, "a", encoding="utf-8") as f:
+            f.write("\n".join(lines) + "\n")
+    except OSError:
+        pass
+
+
 def _process_one_profile(profile: dict, cfg: dict, tz, force: bool) -> str:
     merged_cfg = {**cfg, **profile}
     pid = merged_cfg.get("id", "default")
@@ -146,6 +162,19 @@ def main() -> int:
         write_report(["SKIP: Kuota harian tercapai"])
         return 0
 
+    if not dry_run:
+        # Cek token YouTube dulu: kalau mati, jangan buang kuota Gemini/Cloudflare untuk video yang tak bisa diunggah.
+        try:
+            upload_youtube.check_auth()
+            print("✅ Token YouTube valid.")
+        except Exception as e:  # noqa: BLE001
+            msg = (f"TOKEN YOUTUBE BERMASALAH: {str(e)[:200]}\n"
+                   "Buat ulang YT_REFRESH_TOKEN (OAuth Playground) dan pastikan app OAuth berstatus 'In production'.")
+            print("\n⛔", msg)
+            write_report([msg])
+            write_summary("Run gagal: token YouTube", [msg.replace("\n", " ")])
+            return 1
+
     profiles = cfg.get("profiles")
     if not profiles:
         profiles = [{"id": "default", "source": cfg.get("source", "history"),
@@ -178,9 +207,15 @@ def main() -> int:
                 break
 
     write_report(results)
+    write_summary("Hasil run" + (" (dry-run)" if dry_run else ""), results)
 
     ok_count = sum(1 for r in results if "https://youtube.com/shorts/" in r or "DRY-RUN video" in r)
     print(f"\n🏁 SELESAI. Total video sukses: {ok_count}/{len(profiles)}")
+    # Kode keluar 1 bila ada profil yang error: run ditandai GAGAL di GitHub, sehingga email notifikasi terkirim.
+    failed = [r for r in results if "ERROR" in r or "DIBATALKAN" in r]
+    if failed:
+        print(f"⚠️ {len(failed)} profil gagal -> run ditandai GAGAL agar kamu diberi tahu.")
+        return 1
     return 0
 
 
