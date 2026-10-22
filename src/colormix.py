@@ -25,6 +25,14 @@ FRIENDLY = {
     "gold": "#E6B800", "maroon": "#800000", "navy": "#000080", "beige": "#E8D8B0", "cyan": "#00FFFF",
 }
 POPULAR = list(FRIENDLY)
+
+# Nama ramah anak (buah, benda, alam) selain 20 warna populer di atas dan semua nama warna standar web (CSS).
+EXTRA = {
+    "banana": "#FFE135", "lemon": "#FFF44F", "strawberry": "#E8333F", "cherry": "#DE3163", "apple": "#E52B2B",
+    "grape": "#6F2DA8", "blueberry": "#4F86F7", "mango": "#FFB000", "watermelon": "#FC6C85", "avocado": "#568203",
+    "coffee": "#6F4E37", "bubblegum": "#FFC1CC", "sunshine": "#FFD700", "sunset": "#FD5E53", "rose": "#E8416F",
+    "ocean": "#0077BE", "sky": "#87CEEB", "grass": "#4CBB17", "sand": "#E2CA76", "rust": "#B7410E",
+}
 PREFIX = ("dark", "light", "medium", "deep", "pale", "hot", "dim")
 
 PAINT_COL = {"red": (226, 50, 50), "yellow": (250, 210, 40), "blue": (50, 100, 230),
@@ -57,6 +65,8 @@ def parse_color(text: str):
     key = re.sub(r"[\s_-]+", "", raw.lower())
     if key in FRIENDLY:
         return key.title(), key, ImageColor.getrgb(FRIENDLY[key])
+    if key in EXTRA:
+        return key.title(), key, ImageColor.getrgb(EXTRA[key])
     if re.fullmatch(r"#?[0-9a-f]{6}", key):
         rgb = ImageColor.getrgb("#" + key.lstrip("#"))
         return _hex(rgb), f"this shade of {nearest_friendly(rgb)}", rgb
@@ -64,7 +74,8 @@ def parse_color(text: str):
         rgb = ImageColor.getrgb(key)[:3]
     except ValueError:
         raise ValueError(f"Warna tidak dikenali: '{raw}'. Pakai nama Inggris (orange) atau hex (#FF8800).")
-    spoken = _spoken(key)
+    nice = re.sub(r"[\s_-]+", " ", raw.lower()).strip()
+    spoken = nice if " " in nice else _spoken(key)
     return spoken.title(), spoken, rgb
 
 
