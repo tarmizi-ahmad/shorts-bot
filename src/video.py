@@ -79,12 +79,18 @@ def _year_filter(year, h: int) -> str:
 
 
 def make_clip(image: str, audio: str, out: str, w: int, h: int, text: str = "",
-              cal: dict | None = None, year=None, zoom: bool = True) -> None:
-    """cal = hasil mascot.prepare(); bila None, klip tanpa maskot. zoom=False: latar diam (untuk grafik/angka)."""
+              cal: dict | None = None, year=None, zoom: bool = True, frames: bool = False) -> None:
+    """cal = hasil mascot.prepare(); bila None, klip tanpa maskot. zoom=False: latar diam (untuk grafik/angka).
+    frames=True: image adalah pola urutan bingkai (mis. dir/f_%03d.png) yang diperpanjang sampai audio selesai."""
     dur = _duration(audio)
     base = os.path.splitext(out)[0]
     # Latar: zoom pelan (Ken Burns) selama durasi audio.
-    if zoom:
+    if frames:
+        bg = (
+            f"[0:v]fps=30,tpad=stop_mode=clone:stop_duration={dur + 1:.2f},"
+            f"scale={w}:{h},format=yuv420p"
+        )
+    elif zoom:
         bg = (
             f"[0:v]scale={w*2}:{h*2}:force_original_aspect_ratio=increase,"
             f"crop={w*2}:{h*2},"
@@ -96,7 +102,7 @@ def make_clip(image: str, audio: str, out: str, w: int, h: int, text: str = "",
             f"[0:v]scale={w}:{h}:force_original_aspect_ratio=increase,"
             f"crop={w}:{h},fps=30,format=yuv420p"
         )
-    inputs = ["-loop", "1", "-framerate", "30", "-i", image]
+    inputs = ["-framerate", "30", "-i", image] if frames else ["-loop", "1", "-framerate", "30", "-i", image]
     graph, last = [], "bg"
 
     if cal:
@@ -121,7 +127,7 @@ def make_clip(image: str, audio: str, out: str, w: int, h: int, text: str = "",
     tail.append("format=yuv420p")
     graph.append(f"[{last}]" + ",".join(tail) + "[v]")
 
-    audio_idx = len(inputs) // 6  # tiap input video memakai 6 argumen (-loop 1 -framerate 30 -i f)
+    audio_idx = inputs.count("-i")  # jumlah input video; audio ada tepat sesudahnya
     _run(
         ["ffmpeg", "-y", *inputs, "-i", audio,
          "-filter_complex", ";".join(graph),

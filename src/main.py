@@ -145,6 +145,8 @@ COLOR_DEFAULTS = {
     "id": "color_mix", "voice": "en_US-lessac-medium", "width": 1080, "height": 1920,
     "privacy": "private", "token_env": "YT_REFRESH_TOKEN", "max_per_run": 2, "category": "27",
     "log_country": "COLOR",  # dicatat terpisah supaya tidak memakan kuota harian video sejarah
+    "style": "kids",         # "kids" = cerah & beranimasi, "clean" = tampilan gelap polos
+    "made_for_kids": False,  # True bila video memang ditujukan untuk anak (lihat catatan kebijakan YouTube)
 }
 
 
@@ -160,8 +162,10 @@ def _process_color(item: str, ccfg: dict, suggest_used: set) -> str:
     print(f"\n{'='*60}\n🎨 MEMULAI MODE: {pid.upper()} -> {label} ({c['hex']})\n{'='*60}")
     print(f"[{pid}] Cat: {c['paint']} | Layar: {c['screen']}")
 
-    data = colormix.generate(c)
+    style = ccfg.get("style", "kids")
+    data = colormix.generate(c, style)
     data["category"] = ccfg["category"]
+    data["made_for_kids"] = bool(ccfg.get("made_for_kids", False))
     out = os.path.join(OUT_DIR, pid, tid.replace(":", "_").replace("#", "x"))
     os.makedirs(out, exist_ok=True)
     cal = mascot.prepare("modern", "Colors", os.path.join(out, "cal"))
@@ -171,9 +175,13 @@ def _process_color(item: str, ccfg: dict, suggest_used: set) -> str:
     clips = []
     for i, sc in enumerate(data["scenes"]):
         img, aud, clip = (os.path.join(out, f"s{i}.{e}") for e in ("png", "mp3", "mp4"))
-        colormix.render_scene(sc["kind"], c, img, w, h, suggest)
+        if style == "kids":
+            src = colormix.render_kids(sc["kind"], c, os.path.join(out, f"f{i}"), w, h, suggest)
+        else:
+            colormix.render_scene(sc["kind"], c, img, w, h, suggest)
+            src = img
         tts.make_voice(sc["narration"], ccfg["voice"], aud)
-        video.make_clip(img, aud, clip, w, h, sc["narration"], cal, None, zoom=False)
+        video.make_clip(src, aud, clip, w, h, sc["narration"], cal, None, zoom=False, frames=(style == "kids"))
         clips.append(clip)
         print(f"[{pid}] Scene {i + 1}/{len(data['scenes'])} selesai ({sc['kind']})")
 

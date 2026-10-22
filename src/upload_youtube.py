@@ -42,7 +42,7 @@ def upload(path: str, meta: dict, privacy: str = "private", token_env: str = "YT
         },
         "status": {
             "privacyStatus": privacy,
-            "selfDeclaredMadeForKids": False,
+            "selfDeclaredMadeForKids": bool(meta.get("made_for_kids", False)),
             # Wajib jujur: konten ini dibuat AI.
             "containsSyntheticMedia": True,
         },
