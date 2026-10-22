@@ -35,6 +35,8 @@ EXTRA = {
 }
 PREFIX = ("dark", "light", "medium", "deep", "pale", "hot", "dim")
 
+MIN_SHARE = 15  # bahan primer di bawah ini (persen) dianggap derau model dan dibuang
+
 PAINT_COL = {"red": (226, 50, 50), "yellow": (250, 210, 40), "blue": (50, 100, 230),
              "white": (240, 240, 240), "black": (40, 40, 48)}
 SCREEN_COL = {"red": (255, 70, 70), "green": (60, 220, 100), "blue": (80, 140, 255)}
@@ -143,7 +145,18 @@ def composition(label: str, spoken: str, rgb) -> dict:
         parts["red"], parts["yellow"], parts["blue"] = (pure * v / s for v in (ry, yy, by))
     paint = _round100(parts)
     neutral = chroma <= 0.001
-    keys = ["white", "black"] if neutral else ["red", "yellow", "blue"] + [x for x in ("white", "black") if paint[x] >= 5]
+    if not neutral:
+        # Sederhanakan: bahan primer di bawah MIN_SHARE% dibuang (resep 2-3 bahan lebih mudah dipahami), lalu dihitung ulang.
+        keep = [k for k in ("red", "yellow", "blue") if paint[k] >= MIN_SHARE]
+        if keep:
+            for k in ("red", "yellow", "blue"):
+                if k not in keep:
+                    parts[k] = 0.0
+            paint = _round100(parts)
+    keys = ["white", "black"] if neutral else [k for k in ("red", "yellow", "blue") if paint[k] > 0] + \
+        [x for x in ("white", "black") if paint[x] >= 5]
+    if not keys:
+        keys = ["white"]
     return {
         "label": label, "spoken": spoken, "rgb": tuple(rgb), "hex": _hex(rgb), "neutral": neutral,
         "hue": colorsys.rgb_to_hsv(r, g, b)[0] * 360,
@@ -162,7 +175,7 @@ FACTS COMPUTED BY CODE. Use EXACTLY these numbers and never change them or inven
 
 Write each field as spoken sentences (short, warm, curious, easy for teens and adults, no emojis):
 - "hook": max 14 words. Pull the viewer in with a surprising question about "{spoken}". No digits.
-- "paint": 1-2 sentences. Say EVERY paint number above, each as digits followed by the word percent.
+- "paint": 1-2 sentences. Say EVERY paint number above, each as digits followed by the word percent. White and black are added to make a color lighter or darker; never say they are made by mixing colors.
 - "screen": 1-2 sentences. Say EVERY screen number above, each as digits followed by the word percent. Contrast it with paint.
 - "fact": 1-2 sentences with ONE true, well-known fact about this color, its name, or how our eyes see it. NO digits, no dates, no numbers. If unsure, explain that our eyes use three kinds of cone cells.
 - "outro": max 18 words. Ask which color to break down next and invite a comment. No digits.
@@ -180,7 +193,7 @@ FACTS COMPUTED BY CODE. Use EXACTLY these numbers and never change them or inven
 Style: super simple words, short sentences, excited and playful, like a kind teacher. No emojis, no sarcasm, nothing scary.
 Write each field as spoken sentences:
 - "hook": max 12 words. A fun question or a "guess what" about "{spoken}". No digits.
-- "paint": 1-2 sentences. Compare it to mixing paint or play-dough. Say EVERY paint number above, each as digits followed by the word percent.
+- "paint": 1-2 sentences. Compare it to mixing paint or play-dough. Say EVERY paint number above, each as digits followed by the word percent. White and black are added to make a color lighter or darker; never say they are made by mixing colors.
 - "screen": 1-2 sentences. Say that phones and TVs mix LIGHT instead. Say EVERY screen number above, each as digits followed by the word percent.
 - "fact": 1-2 sentences with ONE true, kid-friendly fact about this color or how our eyes see color. NO digits, no dates, no numbers. If unsure, say our eyes have tiny helpers called cones that see colors.
 - "outro": max 16 words. Cheerfully ask which color to mix next and invite a comment. No digits.
@@ -189,8 +202,36 @@ Write each field as spoken sentences:
 Reply with JSON only: {{"hook":"","paint":"","screen":"","fact":"","outro":"","tags":[]}}"""
 
 
+def _paint_rows(c: dict):
+    """Baris bar cat: warna campuran, lalu '+ white' / '+ black' (bahan tambahan, bukan hasil campuran)."""
+    rows = []
+    for k in c["paint_keys"]:
+        if c["paint"][k] <= 0:
+            continue
+        name = k if (c["neutral"] or k not in ("white", "black")) else f"+ {k}"
+        rows.append((name, c["paint"][k], PAINT_COL[k]))
+    return rows or [("white", 100, PAINT_COL["white"])]
+
+
+def _paint_sub(c: dict) -> str:
+    if c["neutral"]:
+        return "grays are white and black paint (estimate)"
+    if any(k in c["paint_keys"] for k in ("white", "black")):
+        return "white lightens, black darkens (estimate)"
+    return "like mixing paints (estimate)"
+
+
 def _lines(c: dict):
-    paint = ", ".join(f"{c['paint'][k]}% {k}" for k in c["paint_keys"] if c["paint"][k] > 0)
+    if c["neutral"]:
+        paint = ", ".join(f"{c['paint'][k]}% {k}" for k in ("white", "black") if c["paint"][k] > 0)
+        screen = f"red {c['screen']['red']}%, green {c['screen']['green']}%, blue {c['screen']['blue']}%"
+        return paint + " (a neutral color: only white and black paint)", screen
+    base = [k for k in c["paint_keys"] if k not in ("white", "black") and c["paint"][k] > 0]
+    paint = ", ".join(f"{c['paint'][k]}% {k}" for k in base)
+    extra = [f"{c['paint'][k]}% {k}" for k in ("white", "black") if k in c["paint_keys"] and c["paint"][k] > 0]
+    if extra:
+        paint = (paint + "; then ADD " if paint else "ADD ") + " and ".join(extra) + (
+            " (white/black paint is added to make it lighter/darker; it is NOT made by mixing other colors)")
     screen = f"red {c['screen']['red']}%, green {c['screen']['green']}%, blue {c['screen']['blue']}%"
     return paint, screen
 
@@ -201,8 +242,27 @@ def _says(text: str, nums) -> bool:
 
 def _fallback(c: dict, style: str = "kids") -> dict:
     sp = c["spoken"]
-    parts = [f"{c['paint'][k]} percent {k}" for k in c["paint_keys"] if c["paint"][k] > 0]
-    paint = parts[0] if len(parts) == 1 else ", ".join(parts[:-1]) + " and " + parts[-1]
+    if c["neutral"]:
+        both = [f"{c['paint'][k]} percent {k}" for k in ("white", "black") if c["paint"][k] > 0]
+        paint = " and ".join(both)
+        s = c["screen"]
+        paint_txt = (f"{sp} paint is just {paint} paint" if len(both) == 1 else f"{sp} is made from {paint} paint")
+        return {
+            "hook": f"Guess what? Let's find out what colors make {sp}!",
+            "paint": f"With paint, {paint_txt}.",
+            "screen": (f"Phones and TVs mix light instead! They use {s['red']} percent red light, "
+                       f"{s['green']} percent green, and {s['blue']} percent blue. Wow!"),
+            "fact": "Your eyes have tiny helpers called cones. They see red, green, and blue, and your brain mixes them!",
+            "outro": "Which color should we mix next? Tell me in the comments!",
+            "tags": ["learn colors", "color mixing", "art for kids", "science"],
+        }
+    base = [f"{c['paint'][k]} percent {k}" for k in c["paint_keys"] if k not in ("white", "black") and c["paint"][k] > 0]
+    paint = base[0] if len(base) == 1 else (", ".join(base[:-1]) + " and " + base[-1] if base else "")
+    if "white" in c["paint_keys"] and c["paint"]["white"] > 0:
+        paint += (", then" if paint else "") + f" {c['paint']['white']} percent white to make it lighter"
+    if "black" in c["paint_keys"] and c["paint"]["black"] > 0:
+        paint += (" and" if "white" in c["paint_keys"] else ", then") + f" {c['paint']['black']} percent black to make it darker"
+    paint = paint.strip()
     s = c["screen"]
     if style == "kids":
         return {
@@ -354,8 +414,7 @@ def render_scene(kind: str, c: dict, path: str, w: int, h: int, suggest=None) ->
                             outline=(255, 255, 255), width=int(8 * u))
         _center(d, c["hex"], h * 0.43, w, 46 * u, (220, 226, 240))
     elif kind == "paint":
-        rows = [(k, c["paint"][k], PAINT_COL[k]) for k in c["paint_keys"]]
-        _bars(img, c, w, h, "PAINT MIX", "artist's red-yellow-blue wheel (estimate)", rows)
+        _bars(img, c, w, h, "PAINT MIX", _paint_sub(c), _paint_rows(c))
     elif kind == "screen":
         rows = [(k, c["screen"][k], SCREEN_COL[k]) for k in ("red", "green", "blue")]
         _bars(img, c, w, h, "SCREEN LIGHT", "red-green-blue (RGB), exact", rows)
@@ -497,8 +556,7 @@ def _kid_scene(kind, c, w, h, p, suggest, base, shadow):
             _star(d, w * 0.87, h * 0.425, 28 * u * (0.6 + 0.4 * math.cos(p * 9)), CONFETTI[4])
         _center(d, c["hex"], h * 0.43, w, 46 * u, INK)
     elif kind == "paint":
-        rows = [(k, c["paint"][k], PAINT_COL[k]) for k in c["paint_keys"]]
-        _kid_bars(d, c, w, h, "PAINT MIX", "like mixing paints (estimate)", rows, p, shadow)
+        _kid_bars(d, c, w, h, "PAINT MIX", _paint_sub(c), _paint_rows(c), p, shadow)
     elif kind == "screen":
         rows = [(k, c["screen"][k], SCREEN_COL[k]) for k in ("red", "green", "blue")]
         _kid_bars(d, c, w, h, "SCREEN LIGHT", "phones & TVs mix light (exact)", rows, p, shadow)
