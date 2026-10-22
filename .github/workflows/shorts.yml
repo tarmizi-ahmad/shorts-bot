@@ -2,11 +2,22 @@ name: shorts-bot
 
 on:
   schedule:
-    - cron: "5 * * * *"   # tiap jam; gerbang di bawah membaca peak_hours dari config.json
+    - cron: "5 * * * *"   # tiap jam; gerbang di bawah membaca peak_hours dari config.json (hanya video sejarah)
   workflow_dispatch:
     inputs:
+      mode:
+        description: "Jenis video yang dibuat"
+        type: choice
+        options:
+          - history
+          - color_mix
+        default: history
+      colors:
+        description: "Khusus color_mix: daftar warna dipisah koma (mis. orange, purple, teal, #336699). Kosong = otomatis dari daftar populer"
+        type: string
+        default: ""
       force:
-        description: "Abaikan cek jam ramai & kuota (untuk tes)"
+        description: "Abaikan cek jam ramai & kuota (untuk tes, mode history)"
         type: boolean
         default: false
       upload_youtube:
@@ -26,10 +37,11 @@ jobs:
       - uses: actions/checkout@v4
 
       # Gerbang: baca config.json dulu. Di luar jam ramai, semua langkah berat di bawah dilewati.
+      # color_mix, force, dan dry-run selalu lolos (dijalankan manual).
       - name: Cek jam ramai (gerbang)
         id: gate
         env:
-          BYPASS: ${{ (github.event_name == 'workflow_dispatch' && (inputs.force || !inputs.upload_youtube)) && '1' || '0' }}
+          BYPASS: ${{ (github.event_name == 'workflow_dispatch' && (inputs.force || !inputs.upload_youtube || inputs.mode == 'color_mix')) && '1' || '0' }}
         run: |
           python3 - <<'PY'
           import datetime as dt, json, os
@@ -72,6 +84,8 @@ jobs:
       - name: Jalankan pipeline
         if: steps.gate.outputs.run == 'true'
         env:
+          PROFILE_KIND: ${{ inputs.mode || 'history' }}
+          COLORS: ${{ inputs.colors || '' }}
           FORCE: ${{ inputs.force && '1' || '0' }}
           UPLOAD_YOUTUBE: ${{ (github.event_name == 'workflow_dispatch' && !inputs.upload_youtube) && '0' || '1' }}
           YOUTUBE_API_KEY: ${{ secrets.YOUTUBE_API_KEY }}
@@ -80,6 +94,7 @@ jobs:
           YT_CLIENT_ID: ${{ secrets.YT_CLIENT_ID }}
           YT_CLIENT_SECRET: ${{ secrets.YT_CLIENT_SECRET }}
           YT_REFRESH_TOKEN: ${{ secrets.YT_REFRESH_TOKEN }}
+          YT_REFRESH_TOKEN_COLOR: ${{ secrets.YT_REFRESH_TOKEN_COLOR }}
           SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
           SUPABASE_KEY: ${{ secrets.SUPABASE_KEY }}
           CF_ACCOUNT_ID: ${{ secrets.CF_ACCOUNT_ID }}

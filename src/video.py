@@ -79,17 +79,23 @@ def _year_filter(year, h: int) -> str:
 
 
 def make_clip(image: str, audio: str, out: str, w: int, h: int, text: str = "",
-              cal: dict | None = None, year=None) -> None:
-    """cal = hasil mascot.prepare(); bila None, klip tanpa maskot."""
+              cal: dict | None = None, year=None, zoom: bool = True) -> None:
+    """cal = hasil mascot.prepare(); bila None, klip tanpa maskot. zoom=False: latar diam (untuk grafik/angka)."""
     dur = _duration(audio)
     base = os.path.splitext(out)[0]
     # Latar: zoom pelan (Ken Burns) selama durasi audio.
-    bg = (
-        f"[0:v]scale={w*2}:{h*2}:force_original_aspect_ratio=increase,"
-        f"crop={w*2}:{h*2},"
-        f"zoompan=z='min(zoom+0.0008,1.15)':d=1:s={w}x{h}:fps=30,"
-        "format=yuv420p"
-    )
+    if zoom:
+        bg = (
+            f"[0:v]scale={w*2}:{h*2}:force_original_aspect_ratio=increase,"
+            f"crop={w*2}:{h*2},"
+            f"zoompan=z='min(zoom+0.0008,1.15)':d=1:s={w}x{h}:fps=30,"
+            "format=yuv420p"
+        )
+    else:  # grafik tidak boleh terpotong oleh zoom
+        bg = (
+            f"[0:v]scale={w}:{h}:force_original_aspect_ratio=increase,"
+            f"crop={w}:{h},fps=30,format=yuv420p"
+        )
     inputs = ["-loop", "1", "-framerate", "30", "-i", image]
     graph, last = [], "bg"
 

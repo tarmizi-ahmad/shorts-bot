@@ -7,10 +7,14 @@ from googleapiclient.http import MediaFileUpload
 SCOPES = ["https://www.googleapis.com/auth/youtube.upload"]
 
 
-def _creds():
+def _creds(token_env: str = "YT_REFRESH_TOKEN"):
+    """token_env = nama secret refresh token. Channel berbeda = refresh token berbeda."""
+    refresh = os.environ.get(token_env, "").strip()
+    if not refresh:
+        raise RuntimeError(f"Secret {token_env} kosong/belum dibuat (token channel tujuan upload).")
     return Credentials(
         token=None,
-        refresh_token=os.environ["YT_REFRESH_TOKEN"],
+        refresh_token=refresh,
         client_id=os.environ["YT_CLIENT_ID"],
         client_secret=os.environ["YT_CLIENT_SECRET"],
         token_uri="https://oauth2.googleapis.com/token",
@@ -18,23 +22,23 @@ def _creds():
     )
 
 
-def _service():
-    return build("youtube", "v3", credentials=_creds())
+def _service(token_env: str = "YT_REFRESH_TOKEN"):
+    return build("youtube", "v3", credentials=_creds(token_env))
 
 
-def check_auth() -> None:
+def check_auth(token_env: str = "YT_REFRESH_TOKEN") -> None:
     """Cek token YouTube SEBELUM membuat video. Raise RefreshError bila token kedaluwarsa/dicabut."""
     from google.auth.transport.requests import Request
-    _creds().refresh(Request())
+    _creds(token_env).refresh(Request())
 
 
-def upload(path: str, meta: dict, privacy: str = "private") -> str:
+def upload(path: str, meta: dict, privacy: str = "private", token_env: str = "YT_REFRESH_TOKEN") -> str:
     body = {
         "snippet": {
             "title": (meta["title"] + " #Shorts")[:100],
             "description": meta["description"] + "\n\n#Shorts",
             "tags": meta.get("tags", []),
-            "categoryId": "24",
+            "categoryId": str(meta.get("category", "24")),
         },
         "status": {
             "privacyStatus": privacy,
@@ -44,7 +48,7 @@ def upload(path: str, meta: dict, privacy: str = "private") -> str:
         },
     }
     media = MediaFileUpload(path, mimetype="video/mp4", resumable=True)
-    req = _service().videos().insert(part="snippet,status", body=body, media_body=media)
+    req = _service(token_env).videos().insert(part="snippet,status", body=body, media_body=media)
     resp = None
     while resp is None:
         _, resp = req.next_chunk()

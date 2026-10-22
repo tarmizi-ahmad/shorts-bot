@@ -6,7 +6,7 @@ import sys
 import traceback
 from zoneinfo import ZoneInfo
 
-from . import db, history, images, mascot, notify, script_gen, trends, tts, upload_facebook, upload_youtube, video
+from . import colormix, db, history, images, mascot, notify, script_gen, trends, tts, upload_facebook, upload_youtube, video
 
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 OUT_DIR = os.path.join(ROOT, "output")
@@ -141,14 +141,92 @@ def _process_one_profile(profile: dict, cfg: dict, tz, force: bool) -> str:
     return f"[{pid}] https://youtube.com/shorts/{vid} — {data['title']} (privacy: {merged_cfg.get('privacy', 'private')})"
 
 
+COLOR_DEFAULTS = {
+    "id": "color_mix", "voice": "en_US-lessac-medium", "width": 1080, "height": 1920,
+    "privacy": "private", "token_env": "YT_REFRESH_TOKEN", "max_per_run": 2, "category": "27",
+    "log_country": "COLOR",  # dicatat terpisah supaya tidak memakan kuota harian video sejarah
+}
+
+
+def color_cfg(cfg: dict) -> dict:
+    return {**COLOR_DEFAULTS, **cfg.get("color_mix", {})}
+
+
+def _process_color(item: str, ccfg: dict, suggest_used: set) -> str:
+    pid = ccfg["id"]
+    label, spoken, rgb = colormix.parse_color(item)
+    c = colormix.composition(label, spoken, rgb)
+    tid = colormix.topic_id(label)
+    print(f"\n{'='*60}\n🎨 MEMULAI MODE: {pid.upper()} -> {label} ({c['hex']})\n{'='*60}")
+    print(f"[{pid}] Cat: {c['paint']} | Layar: {c['screen']}")
+
+    data = colormix.generate(c)
+    data["category"] = ccfg["category"]
+    out = os.path.join(OUT_DIR, pid, tid.replace(":", "_").replace("#", "x"))
+    os.makedirs(out, exist_ok=True)
+    cal = mascot.prepare("modern", "Colors", os.path.join(out, "cal"))
+    suggest = colormix.suggestions(label, suggest_used)
+
+    w, h = ccfg["width"], ccfg["height"]
+    clips = []
+    for i, sc in enumerate(data["scenes"]):
+        img, aud, clip = (os.path.join(out, f"s{i}.{e}") for e in ("png", "mp3", "mp4"))
+        colormix.render_scene(sc["kind"], c, img, w, h, suggest)
+        tts.make_voice(sc["narration"], ccfg["voice"], aud)
+        video.make_clip(img, aud, clip, w, h, sc["narration"], cal, None, zoom=False)
+        clips.append(clip)
+        print(f"[{pid}] Scene {i + 1}/{len(data['scenes'])} selesai ({sc['kind']})")
+
+    final = os.path.join(out, "final.mp4")
+    video.concat(clips, os.path.join(out, "list.txt"), final)
+
+    if os.environ.get("UPLOAD_YOUTUBE") == "0":
+        print(f"[{pid}] 🧪 DRY-RUN: upload dilewati. Video: {final}")
+        return f"[{pid}] DRY-RUN video tersimpan: {final}"
+
+    vid = upload_youtube.upload(final, data, ccfg["privacy"], ccfg["token_env"])
+    print(f"[{pid}] ✅ Terupload: https://youtube.com/shorts/{vid}")
+    suggest_used.add(tid)
+    try:
+        db.log_post(ccfg["log_country"], tid, data["title"], vid)
+    except Exception as e:  # noqa: BLE001 - video sudah terupload, jangan dianggap gagal
+        print(f"[{pid}] ⚠️ Gagal mencatat ke database (video tetap terupload): {str(e)[:150]}")
+    return f"[{pid}] https://youtube.com/shorts/{vid} — {data['title']} (privacy: {ccfg['privacy']})"
+
+
+def _color_jobs(cfg: dict, ccfg: dict, dry_run: bool):
+    """Daftar (id, fungsi) untuk mode color_mix. Kolom warna kosong = ambil otomatis dari daftar populer."""
+    try:
+        used = set(db.used_topics(ccfg["log_country"]))
+    except Exception as e:  # noqa: BLE001
+        print(f"⚠️ Riwayat warna tidak terbaca ({str(e)[:100]}). Lanjut tanpa riwayat.")
+        used = set()
+    items = colormix.requested_colors(os.environ.get("COLORS", ""), int(ccfg["max_per_run"]))
+    if not items:
+        taken = set(used)
+        for _ in range(int(ccfg["max_per_run"])):
+            nxt = colormix.pick_next(taken)
+            if not nxt:
+                break
+            items.append(nxt[0])
+            taken.add(colormix.topic_id(nxt[0]))
+        print(f"ℹ️ Kolom warna kosong, otomatis memilih: {items}")
+    return [(f"{ccfg['id']}:{it}", (lambda it=it: _process_color(it, ccfg, used))) for it in items]
+
+
 def main() -> int:
     cfg = load_cfg()
     tz = ZoneInfo(cfg["timezone"])
     now = dt.datetime.now(tz)
+    kind = (os.environ.get("PROFILE_KIND") or "history").strip().lower()
+    is_color = kind == "color_mix"
     dry_run = os.environ.get("UPLOAD_YOUTUBE") == "0"
-    force = os.environ.get("FORCE") == "1" or dry_run  # dry-run tidak memposting, jadi cek jam & kuota dilewati
+    # color_mix selalu dijalankan manual: cek jam ramai & kuota harian dilewati. Dry-run juga tidak memposting.
+    force = os.environ.get("FORCE") == "1" or dry_run or is_color
     if dry_run:
         print("🧪 MODE DRY-RUN: video dibuat tapi TIDAK diunggah ke YouTube/Facebook.")
+    if is_color:
+        print("🎨 MODE COLOR_MIX: hanya membuat video komposisi warna.")
 
     if not force and now.hour not in cfg["peak_hours"]:
         msg = f"Jam {now.hour} bukan jam ramai {cfg['peak_hours']} ({cfg['timezone']})."
@@ -156,77 +234,86 @@ def main() -> int:
         write_report([f"SKIP: {msg}"])
         return 0
 
-    if db.posted_today(cfg["country"], tz) >= cfg["max_posts_per_day"] and not force:
+    if not force and db.posted_today(cfg["country"], tz) >= cfg["max_posts_per_day"]:
         msg = "Kuota harian tercapai. Lewati."
         print(msg)
         write_report(["SKIP: Kuota harian tercapai"])
         return 0
 
+    ccfg = color_cfg(cfg)
     if not dry_run:
         # Cek token YouTube dulu: kalau mati, jangan buang kuota Gemini/Cloudflare untuk video yang tak bisa diunggah.
+        token_env = ccfg["token_env"] if is_color else "YT_REFRESH_TOKEN"
         try:
-            upload_youtube.check_auth()
-            print("✅ Token YouTube valid.")
+            upload_youtube.check_auth(token_env)
+            print(f"✅ Token YouTube valid ({token_env}).")
         except Exception as e:  # noqa: BLE001
-            msg = (f"TOKEN YOUTUBE BERMASALAH: {str(e)[:200]}\n"
-                   "Buat ulang YT_REFRESH_TOKEN (OAuth Playground) dan pastikan app OAuth berstatus 'In production'.")
+            msg = (f"TOKEN YOUTUBE BERMASALAH ({token_env}): {str(e)[:200]}\n"
+                   "Buat ulang refresh token (OAuth Playground) dan pastikan app OAuth berstatus 'In production'.")
             print("\n⛔", msg)
             write_report([msg])
             write_summary("Run gagal: token YouTube", [msg.replace("\n", " ")])
             # Kegagalan diberitahukan lewat email GitHub (exit 1), bukan email bot.
             return 1
 
-    profiles = cfg.get("profiles")
-    if not profiles:
-        profiles = [{"id": "default", "source": cfg.get("source", "history"),
-                     "language": cfg.get("language", "English"), "niche": cfg.get("niche", ""),
-                     "angle": cfg.get("angle", ""), "scenes": cfg.get("scenes", 5),
-                     "width": cfg.get("width", 1080), "height": cfg.get("height", 1920),
-                     "voice": cfg.get("voice", "en_US-ryan-high")}]
+    if is_color:
+        jobs = _color_jobs(cfg, ccfg, dry_run)
+    else:
+        profiles = cfg.get("profiles")
+        if not profiles:
+            profiles = [{"id": "default", "source": cfg.get("source", "history"),
+                         "language": cfg.get("language", "English"), "niche": cfg.get("niche", ""),
+                         "angle": cfg.get("angle", ""), "scenes": cfg.get("scenes", 5),
+                         "width": cfg.get("width", 1080), "height": cfg.get("height", 1920),
+                         "voice": cfg.get("voice", "en_US-ryan-high")}]
+        jobs = [(p.get("id", "default"), (lambda p=p: _process_one_profile(p, cfg, tz, force))) for p in profiles]
 
     results = []
-    for n, profile in enumerate(profiles):
-        pid = profile.get("id", "default")
-        if db.posted_today(cfg["country"], tz) >= cfg["max_posts_per_day"] and not force:
+    for n, (pid, job) in enumerate(jobs):
+        if not force and db.posted_today(cfg["country"], tz) >= cfg["max_posts_per_day"]:
             print("Kuota harian tercapai. Stop.")
             results.append(f"[{pid}] Kuota tercapai")
             continue
 
         try:
-            results.append(_process_one_profile(profile, cfg, tz, force))
+            results.append(job())
         except Exception as e:  # noqa: BLE001
             tb = traceback.format_exc()
             root_cause = tb.strip().split("\n")[-1]
             print(f"\n❌ GAGAL di mode {pid}: {root_cause}")
             results.append(f"[{pid}] ERROR: {root_cause}")
 
-            # Batas upload YouTube berlaku untuk seluruh channel: profil berikutnya pasti gagal juga.
+            # Batas upload YouTube berlaku untuk seluruh channel: job berikutnya pasti gagal juga.
             if "uploadLimitExceeded" in root_cause or "exceeded the number of videos" in root_cause:
                 print("\n⛔ BATAS UPLOAD YOUTUBE TERCAPAI. Menghentikan pipeline untuk menghemat resource.")
-                for later in profiles[n + 1:]:
-                    results.append(f"[{later.get('id', 'default')}] DIBATALKAN: batas upload YouTube tercapai.")
+                for later_id, _ in jobs[n + 1:]:
+                    results.append(f"[{later_id}] DIBATALKAN: batas upload YouTube tercapai.")
                 break
 
+    if not jobs:
+        results.append("Tidak ada yang dikerjakan (daftar kosong). Semua warna populer sudah pernah dibuat?")
+
     write_report(results)
-    write_summary("Hasil run" + (" (dry-run)" if dry_run else ""), results)
+    write_summary("Hasil run" + (" color_mix" if is_color else "") + (" (dry-run)" if dry_run else ""), results)
 
     ok_count = sum(1 for r in results if "https://youtube.com/shorts/" in r or "DRY-RUN video" in r)
-    print(f"\n🏁 SELESAI. Total video sukses: {ok_count}/{len(profiles)}")
+    print(f"\n🏁 SELESAI. Total video sukses: {ok_count}/{len(jobs)}")
 
     # Email bot HANYA untuk video yang berhasil diupload (lengkap dengan link).
     # Kegagalan sengaja tidak dikirim dari sini: run ditandai GAGAL (exit 1) dan GitHub yang mengirim email.
     up = sum(1 for r in results if "https://youtube.com/shorts/" in r)
     if up and not dry_run:
-        if up == len(profiles):
-            subject = f"✅ Shorts-ai: {up} video berhasil diupload"
+        tag = "Shorts-ai color_mix" if is_color else "Shorts-ai"
+        if up == len(jobs):
+            subject = f"✅ {tag}: {up} video berhasil diupload"
         else:
-            subject = f"⚠️ Shorts-ai: {up}/{len(profiles)} video berhasil diupload (sebagian gagal)"
+            subject = f"⚠️ {tag}: {up}/{len(jobs)} video berhasil diupload (sebagian gagal)"
         notify.notify(subject, results)
 
-    # Kode keluar 1 bila ada profil yang error: run ditandai GAGAL di GitHub, sehingga email notifikasi terkirim.
+    # Kode keluar 1 bila ada yang error: run ditandai GAGAL di GitHub, sehingga email notifikasi terkirim.
     failed = [r for r in results if "ERROR" in r or "DIBATALKAN" in r]
     if failed:
-        print(f"⚠️ {len(failed)} profil gagal -> run ditandai GAGAL agar kamu diberi tahu.")
+        print(f"⚠️ {len(failed)} job gagal -> run ditandai GAGAL agar kamu diberi tahu.")
         return 1
     return 0
 
