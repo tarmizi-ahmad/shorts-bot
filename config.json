@@ -5,8 +5,8 @@
   "source": "history",
   "peak_hours": [12, 19],
   "max_posts_per_day": 2,
-  "privacy": "public",
-  "color_mix": { "style": "kids", "made_for_kids": false, "privacy": "private" },
+  "privacy": "private",
+  "color_mix": { "token_env": "YT_REFRESH_TOKEN_COLOR", "style": "kids", "made_for_kids": false, "privacy": "private" },
   "profiles": [
     {
       "id": "history_fact",
