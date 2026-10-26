@@ -32,6 +32,13 @@ EXTRA = {
     "grape": "#6F2DA8", "blueberry": "#4F86F7", "mango": "#FFB000", "watermelon": "#FC6C85", "avocado": "#568203",
     "coffee": "#6F4E37", "bubblegum": "#FFC1CC", "sunshine": "#FFD700", "sunset": "#FD5E53", "rose": "#E8416F",
     "ocean": "#0077BE", "sky": "#87CEEB", "grass": "#4CBB17", "sand": "#E2CA76", "rust": "#B7410E",
+    "pumpkin": "#FF7518", "carrot": "#ED9121", "tangerine": "#FF9408", "honey": "#EBA937", "butter": "#FFF29B",
+    "cream": "#FFF3C4", "caramel": "#C68E4E", "chocolate": "#7B3F00", "cinnamon": "#9C5A2E", "pistachio": "#A8E060",
+    "kiwi": "#8EE53F", "melon": "#FDBCB4", "raspberry": "#D6336C", "plum": "#A020A0", "blackberry": "#5A2090",
+    "cottoncandy": "#FFB7E0", "flamingo": "#FC8EAC", "seafoam": "#70F0C0", "jade": "#00A86B", "emerald": "#18B368",
+    "sapphire": "#0F52BA", "ruby": "#C2123C", "amber": "#FFBF00", "bronze": "#B0793A", "copper": "#B87333",
+    "charcoal": "#2A3A60", "denim": "#3A64B4", "midnight": "#191970", "ice": "#A0E8FF", "lilac": "#C080E0",
+    "periwinkle": "#8F9BFF", "sage": "#A0C080", "forest": "#228B22", "ginger": "#D2691E", "blush": "#F4A6B0",
 }
 PREFIX = ("dark", "light", "medium", "deep", "pale", "hot", "dim")
 
