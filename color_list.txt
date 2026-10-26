@@ -1,0 +1,76 @@
+Hari
+Kolom colors (salin langsung)
+1
+green, lemon
+2
+purple, strawberry
+3
+pink, cherry
+4
+brown, apple
+5
+teal, grape
+6
+turquoise, blueberry
+7
+magenta, mango
+8
+violet, watermelon
+9
+lavender, avocado
+10
+mint, coffee
+11
+coral, bubblegum
+12
+gold, sunshine
+13
+olive, sunset
+14
+maroon, rose
+15
+navy, ocean
+16
+beige, sky
+17
+lime, grass
+18
+cyan, sand
+19
+rust
+20
+pumpkin, kiwi
+21
+chocolate, raspberry
+22
+emerald, honey
+23
+sapphire, caramel
+24
+ruby, pistachio
+25
+plum, tangerine
+26
+forest, cottoncandy
+27
+denim, butter
+28
+jade, flamingo
+29
+amber, lilac
+30
+copper, periwinkle
+31
+cinnamon, midnight
+32
+bronze, melon
+33
+blackberry, seafoam
+34
+ginger, ice
+35
+blush, charcoal
+36
+carrot, sage
+37
+cream

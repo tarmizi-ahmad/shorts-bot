@@ -6,7 +6,7 @@ import sys
 import traceback
 from zoneinfo import ZoneInfo
 
-from . import colormix, db, history, images, mascot, notify, script_gen, trends, tts, upload_facebook, upload_youtube, video
+from . import colormix, colorvs, db, history, images, mascot, notify, script_gen, trends, tts, upload_facebook, upload_youtube, video
 
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 OUT_DIR = os.path.join(ROOT, "output")
@@ -177,7 +177,49 @@ def _manual_ref(pid: str, tid: str, data: dict, final: str) -> None:
         print(f"⚠️ Gagal menulis referensi manual: {e}")
 
 
+def _process_versus(item: str, ccfg: dict, suggest_used: set) -> str:
+    """color_mix 'A vs B': video perbedaan dua warna."""
+    pid = ccfg["id"]
+    a, b = colorvs.build(item)
+    tid = colorvs.topic_id(a, b)
+    print(f"\n{'='*60}\n🎨 MEMULAI MODE: {pid.upper()} VERSUS -> {a['label']} vs {b['label']}\n{'='*60}")
+    data = colorvs.generate(a, b)
+    data["category"] = ccfg["category"]
+    data["made_for_kids"] = bool(ccfg.get("made_for_kids", False))
+    out = os.path.join(OUT_DIR, pid, tid.replace(":", "_").replace("#", "x"))
+    os.makedirs(out, exist_ok=True)
+    cal = mascot.prepare("modern", "Colors", os.path.join(out, "cal"))
+    suggest = colormix.suggestions(a["label"], suggest_used)
+    w, h = ccfg["width"], ccfg["height"]
+    clips = []
+    for i, sc in enumerate(data["scenes"]):
+        aud, clip = (os.path.join(out, f"s{i}.{e}") for e in ("mp3", "mp4"))
+        src = colorvs.render(sc["kind"], a, b, os.path.join(out, f"f{i}"), w, h, suggest, diff_lines=data["_diff_lines"])
+        tts.make_voice(sc["narration"], ccfg["voice"], aud)
+        video.make_clip(src, aud, clip, w, h, sc["narration"], cal, None, zoom=False, frames=True)
+        clips.append(clip)
+        print(f"[{pid}] Scene {i + 1}/{len(data['scenes'])} selesai ({sc['kind']})")
+    final = os.path.join(out, "final.mp4")
+    video.concat(clips, os.path.join(out, "list.txt"), final)
+
+    if os.environ.get("UPLOAD_YOUTUBE") == "0":
+        print(f"[{pid}] 🧪 DRY-RUN: upload dilewati. Video: {final}")
+        _manual_ref(pid, tid, data, final)
+        return f"[{pid}] DRY-RUN video tersimpan: {final}"
+
+    vid = upload_youtube.upload(final, data, ccfg["privacy"], ccfg["token_env"])
+    print(f"[{pid}] ✅ Terupload: https://youtube.com/shorts/{vid}")
+    suggest_used.add(tid)
+    try:
+        db.log_post(ccfg["log_country"], tid, data["title"], vid)
+    except Exception as e:  # noqa: BLE001
+        print(f"[{pid}] ⚠️ Gagal mencatat ke database (video tetap terupload): {str(e)[:150]}")
+    return f"[{pid}] https://youtube.com/shorts/{vid} — {data['title']} (privacy: {ccfg['privacy']})"
+
+
 def _process_color(item: str, ccfg: dict, suggest_used: set) -> str:
+    if colorvs.is_versus(item):
+        return _process_versus(item, ccfg, suggest_used)
     pid = ccfg["id"]
     label, spoken, rgb = colormix.parse_color(item)
     c = colormix.composition(label, spoken, rgb)
