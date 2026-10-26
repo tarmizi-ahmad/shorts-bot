@@ -420,7 +420,7 @@ def _bars(img, c, w, h, title, sub, rows):
         d.rounded_rectangle([x0, y, x1, y + rh], radius=rh / 2, fill=(46, 52, 72))
         fw = max(rh, (x1 - x0) * pct / 100) if pct > 0 else 0
         if fw:
-            d.rounded_rectangle([x0, y, x0 + fw, y + rh], radius=rh / 2, fill=col, outline=(255, 255, 255), width=int(3 * u))
+            _rr(d, [x0, y, x0 + fw, y + rh], rh / 2, fill=col, outline=(255, 255, 255), width=int(3 * u))
         d.text((w * 0.82, y + rh / 2), f"{pct}%", font=_font(52 * u), fill=(255, 255, 255), anchor="lm")
 
 
@@ -552,6 +552,14 @@ def _card(d, box, shadow, u):
     d.rounded_rectangle(box, radius=int(40 * u), fill=(255, 255, 255), outline=INK, width=max(3, int(8 * u)))
 
 
+def _rr(d, box, radius, **kw):
+    """rounded_rectangle yang tidak error untuk kotak sangat kecil (lebar/tinggi < 2x radius)."""
+    x0, y0, x1, y1 = box
+    x1, y1 = max(x1, x0 + 2), max(y1, y0 + 2)
+    r = max(0, min(radius, (x1 - x0) / 2 - 1, (y1 - y0) / 2 - 1))
+    d.rounded_rectangle([x0, y0, x1, y1], radius=r, **kw)
+
+
 def _kid_bars(d, c, w, h, title, sub, rows, p, shadow):
     u = w / 1080
     _title(d, title, h * 0.04, w, 80 * u)
@@ -570,7 +578,7 @@ def _kid_bars(d, c, w, h, title, sub, rows, p, shadow):
         d.rounded_rectangle([x0, y, x1, y + rh], radius=rh / 2, fill=(228, 232, 244), outline=INK, width=max(2, int(4 * u)))
         if pct > 0 and q > 0:
             fw = min(x1 - x0, max(rh * min(1.0, q * 2), (x1 - x0) * pct / 100 * _out_back(q)))
-            d.rounded_rectangle([x0, y, x0 + fw, y + rh], radius=rh / 2, fill=col, outline=INK, width=max(2, int(4 * u)))
+            _rr(d, [x0, y, x0 + fw, y + rh], rh / 2, fill=col, outline=INK, width=max(2, int(4 * u)))
         shown = int(round(pct * _out_cubic(q)))
         d.text((w * 0.76, y + rh / 2), f"{shown}%", font=_font(50 * u), fill=INK, anchor="lm")
 
