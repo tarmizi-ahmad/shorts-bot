@@ -154,6 +154,29 @@ def color_cfg(cfg: dict) -> dict:
     return {**COLOR_DEFAULTS, **cfg.get("color_mix", {})}
 
 
+def _manual_ref(pid: str, tid: str, data: dict, final: str) -> None:
+    """Dry-run color_mix: tulis judul, deskripsi, tag, dan SQL catatan agar bisa upload manual."""
+    q = lambda t: "'" + str(t).replace("'", "''") + "'"
+    sql = (f"insert into posts (country, topic_id, title, video_id)\n"
+           f"select 'COLOR', {q(tid)}, {q(data['title'])}, null\n"
+           f"where not exists (select 1 from posts where country = 'COLOR' and topic_id = {q(tid)});")
+    tags = ", ".join(data.get("tags", []))
+    block = (f"## {tid}\n\nVideo: {final}\n\n### Judul\n```\n{data['title']}\n```\n\n"
+             f"### Deskripsi\n```\n{data['description']}\n```\n\n### Tag\n```\n{tags}\n```\n\n"
+             f"### SQL (jalankan SETELAH video diupload manual)\n```sql\n{sql}\n```\n\n")
+    print("\n" + block)
+    try:
+        os.makedirs(OUT_DIR, exist_ok=True)
+        with open(os.path.join(OUT_DIR, "color_meta.md"), "a", encoding="utf-8") as f:
+            f.write(block)
+        sp = os.environ.get("GITHUB_STEP_SUMMARY")
+        if sp:
+            with open(sp, "a", encoding="utf-8") as f:
+                f.write(block)
+    except OSError as e:
+        print(f"⚠️ Gagal menulis referensi manual: {e}")
+
+
 def _process_color(item: str, ccfg: dict, suggest_used: set) -> str:
     pid = ccfg["id"]
     label, spoken, rgb = colormix.parse_color(item)
@@ -190,6 +213,7 @@ def _process_color(item: str, ccfg: dict, suggest_used: set) -> str:
 
     if os.environ.get("UPLOAD_YOUTUBE") == "0":
         print(f"[{pid}] 🧪 DRY-RUN: upload dilewati. Video: {final}")
+        _manual_ref(pid, tid, data, final)
         return f"[{pid}] DRY-RUN video tersimpan: {final}"
 
     vid = upload_youtube.upload(final, data, ccfg["privacy"], ccfg["token_env"])

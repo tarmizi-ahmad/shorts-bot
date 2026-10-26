@@ -116,5 +116,6 @@ jobs:
           path: |
             output/**/final.mp4
             output/report.txt
+            output/color_meta.md
           if-no-files-found: ignore
           retention-days: 7

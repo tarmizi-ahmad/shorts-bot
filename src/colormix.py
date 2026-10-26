@@ -297,6 +297,40 @@ def _ask(prompt: str):
     return None
 
 
+def _main_parts(c: dict) -> str:
+    """Contoh: 'Yellow + White' dari komposisi cat, untuk judul yang spesifik."""
+    names = [k.title() for k in c["paint_keys"] if c["paint"][k] > 0]
+    return " + ".join(names[:3])
+
+
+def make_meta(c: dict, paint_line: str, screen_line: str) -> tuple:
+    """Judul, deskripsi, tag. Pola judul bergantian per warna (stabil), semuanya memuat nama warna di depan."""
+    lab, hx = c["label"], c["hex"]
+    parts = _main_parts(c)
+    patterns = [
+        f"What Colors Make {lab}? \U0001F3A8",
+        f"How to Mix {lab} Paint \U0001F3A8 ({parts})" if parts else f"How to Mix {lab} Paint \U0001F3A8",
+        f"{lab} = ? The Secret Color Recipe!",
+        f"Mix {lab} in 10 Seconds \U0001F58C\uFE0F",
+        f"Can You Guess the Mix for {lab}? \U0001F914",
+    ]
+    idx = sum(ord(ch) for ch in lab) % len(patterns)
+    title = (patterns[idx] + " #shorts")[:95]
+    if len(title) > 100:
+        title = title[:100]
+    desc = (
+        f"What colors make {lab}? Here is the exact recipe.\n\n"
+        f"\U0001F3A8 PAINT MIX (estimate)\n{paint_line}\n\n"
+        f"\U0001F4BB SCREEN MIX (RGB)\n{screen_line}\n\n"
+        f"Hex code: {hx}\n\n"
+        f"Try it yourself with real paint and tell us what you get!\n"
+        f"\U0001F449 Which color should we mix next? Comment below.\n\n"
+        f"Subscribe for more color recipes.\n\n"
+        f"#shorts #colormixing #learncolors #{re.sub(r'[^a-z0-9]', '', lab.lower())} #artforkids"
+    )
+    return title, desc
+
+
 def generate(c: dict, style: str = "kids") -> dict:
     fb = _fallback(c, style)
     paint_line, screen_line = _lines(c)
@@ -326,10 +360,7 @@ def generate(c: dict, style: str = "kids") -> dict:
         "outro": good("outro"),
     }
     tags = [str(t)[:30] for t in (ai.get("tags") or fb["tags"])][:6]
-    title = f"What Colors Make {c['label']}? | Color Mix"[:85]
-    recipe = "Paint (estimate): " + paint_line + "\nScreen (RGB): " + screen_line
-    desc = (f"How is {c['label']} ({c['hex']}) made? Cal breaks down the exact mix.\n\n{recipe}\n\n"
-            f"Which color should we break down next? Comment below!\n#colormixing #learncolors #art")
+    title, desc = make_meta(c, paint_line, screen_line)
     return {
         "title": title, "description": desc,
         "tags": tags + ["color mixing", "learn colors", c["label"].lower()],
