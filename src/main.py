@@ -150,6 +150,32 @@ COLOR_DEFAULTS = {
 }
 
 
+_SLOT_N = 0
+
+
+def _next_slot(ccfg: dict):
+    """Jadwal tayang color_mix. config color_mix: "schedule_times": ["06:30"], "schedule_tz": "Asia/Jakarta".
+    Mengembalikan (RFC3339 UTC, teks lokal) atau None bila jadwal tidak dipakai. Video ke-n dalam satu run mengambil slot ke-n."""
+    global _SLOT_N
+    times = ccfg.get("schedule_times") or []
+    if not times:
+        return None
+    tz = ZoneInfo(ccfg.get("schedule_tz", "Asia/Jakarta"))
+    now = dt.datetime.now(tz)
+    slots = []
+    for day in range(0, 30):
+        for t in sorted(times):
+            hh, mm = (int(x) for x in t.split(":"))
+            s = (now + dt.timedelta(days=day)).replace(hour=hh, minute=mm, second=0, microsecond=0)
+            if s > now + dt.timedelta(minutes=20):  # YouTube butuh waktu tayang di masa depan
+                slots.append(s)
+        if len(slots) > _SLOT_N:
+            break
+    pick = slots[_SLOT_N]
+    _SLOT_N += 1
+    return pick.astimezone(dt.timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ"), pick.strftime("%d %b %H:%M ") + str(tz)
+
+
 def color_cfg(cfg: dict) -> dict:
     return {**COLOR_DEFAULTS, **cfg.get("color_mix", {})}
 
@@ -207,14 +233,15 @@ def _process_versus(item: str, ccfg: dict, suggest_used: set) -> str:
         _manual_ref(pid, tid, data, final)
         return f"[{pid}] DRY-RUN video tersimpan: {final}"
 
-    vid = upload_youtube.upload(final, data, ccfg["privacy"], ccfg["token_env"])
-    print(f"[{pid}] ✅ Terupload: https://youtube.com/shorts/{vid}")
+    slot = _next_slot(ccfg)
+    vid = upload_youtube.upload(final, data, ccfg["privacy"], ccfg["token_env"], publish_at=slot[0] if slot else None)
+    print(f"[{pid}] ✅ Terupload: https://youtube.com/shorts/{vid}" + (f" (tayang publik {slot[1]})" if slot else ""))
     suggest_used.add(tid)
     try:
         db.log_post(ccfg["log_country"], tid, data["title"], vid)
     except Exception as e:  # noqa: BLE001
         print(f"[{pid}] ⚠️ Gagal mencatat ke database (video tetap terupload): {str(e)[:150]}")
-    return f"[{pid}] https://youtube.com/shorts/{vid} — {data['title']} (privacy: {ccfg['privacy']})"
+    return f"[{pid}] https://youtube.com/shorts/{vid} — {data['title']} ({'tayang ' + slot[1] if slot else 'privacy: ' + ccfg['privacy']})"
 
 
 def _process_color(item: str, ccfg: dict, suggest_used: set) -> str:
@@ -258,14 +285,15 @@ def _process_color(item: str, ccfg: dict, suggest_used: set) -> str:
         _manual_ref(pid, tid, data, final)
         return f"[{pid}] DRY-RUN video tersimpan: {final}"
 
-    vid = upload_youtube.upload(final, data, ccfg["privacy"], ccfg["token_env"])
-    print(f"[{pid}] ✅ Terupload: https://youtube.com/shorts/{vid}")
+    slot = _next_slot(ccfg)
+    vid = upload_youtube.upload(final, data, ccfg["privacy"], ccfg["token_env"], publish_at=slot[0] if slot else None)
+    print(f"[{pid}] ✅ Terupload: https://youtube.com/shorts/{vid}" + (f" (tayang publik {slot[1]})" if slot else ""))
     suggest_used.add(tid)
     try:
         db.log_post(ccfg["log_country"], tid, data["title"], vid)
     except Exception as e:  # noqa: BLE001 - video sudah terupload, jangan dianggap gagal
         print(f"[{pid}] ⚠️ Gagal mencatat ke database (video tetap terupload): {str(e)[:150]}")
-    return f"[{pid}] https://youtube.com/shorts/{vid} — {data['title']} (privacy: {ccfg['privacy']})"
+    return f"[{pid}] https://youtube.com/shorts/{vid} — {data['title']} ({'tayang ' + slot[1] if slot else 'privacy: ' + ccfg['privacy']})"
 
 
 def _color_jobs(cfg: dict, ccfg: dict, dry_run: bool):

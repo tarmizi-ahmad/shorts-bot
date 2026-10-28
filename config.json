@@ -6,7 +6,14 @@
   "peak_hours": [12, 19],
   "max_posts_per_day": 2,
   "privacy": "private",
-  "color_mix": { "token_env": "YT_REFRESH_TOKEN_COLOR", "style": "kids", "made_for_kids": false, "privacy": "private" },
+  "color_mix": {
+    "style": "kids",
+    "made_for_kids": false,
+    "privacy": "private",
+    "token_env": "YT_REFRESH_TOKEN_COLOR",
+    "schedule_times": ["06:30"],
+    "schedule_tz": "Asia/Jakarta"
+  },
   "profiles": [
     {
       "id": "history_fact",

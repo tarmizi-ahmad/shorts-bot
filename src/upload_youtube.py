@@ -12,11 +12,16 @@ def _creds(token_env: str = "YT_REFRESH_TOKEN"):
     refresh = os.environ.get(token_env, "").strip()
     if not refresh:
         raise RuntimeError(f"Secret {token_env} kosong/belum dibuat (token channel tujuan upload).")
+    # Refresh token terikat ke client yang membuatnya. Token "YT_REFRESH_TOKEN_COLOR" boleh memakai client sendiri
+    # (YT_CLIENT_ID_COLOR / YT_CLIENT_SECRET_COLOR); bila tidak diisi, dipakai YT_CLIENT_ID / YT_CLIENT_SECRET.
+    suffix = token_env[len("YT_REFRESH_TOKEN"):] if token_env.startswith("YT_REFRESH_TOKEN") else ""
+    client_id = (os.environ.get("YT_CLIENT_ID" + suffix) or "").strip() or os.environ["YT_CLIENT_ID"].strip()
+    client_secret = (os.environ.get("YT_CLIENT_SECRET" + suffix) or "").strip() or os.environ["YT_CLIENT_SECRET"].strip()
     return Credentials(
         token=None,
         refresh_token=refresh,
-        client_id=os.environ["YT_CLIENT_ID"],
-        client_secret=os.environ["YT_CLIENT_SECRET"],
+        client_id=client_id,
+        client_secret=client_secret,
         token_uri="https://oauth2.googleapis.com/token",
         scopes=SCOPES,
     )
@@ -32,7 +37,8 @@ def check_auth(token_env: str = "YT_REFRESH_TOKEN") -> None:
     _creds(token_env).refresh(Request())
 
 
-def upload(path: str, meta: dict, privacy: str = "private", token_env: str = "YT_REFRESH_TOKEN") -> str:
+def upload(path: str, meta: dict, privacy: str = "private", token_env: str = "YT_REFRESH_TOKEN", publish_at: str = None) -> str:
+    """publish_at (RFC3339 UTC, mis. 2026-10-29T23:30:00Z): video diunggah private lalu tayang PUBLIK otomatis pada waktu itu."""
     body = {
         "snippet": {
             "title": (meta["title"] + " #Shorts")[:100],
@@ -47,6 +53,9 @@ def upload(path: str, meta: dict, privacy: str = "private", token_env: str = "YT
             "containsSyntheticMedia": True,
         },
     }
+    if publish_at:
+        body["status"]["privacyStatus"] = "private"
+        body["status"]["publishAt"] = publish_at
     media = MediaFileUpload(path, mimetype="video/mp4", resumable=True)
     req = _service(token_env).videos().insert(part="snippet,status", body=body, media_body=media)
     resp = None
