@@ -120,9 +120,12 @@ def _process_one_profile(profile: dict, cfg: dict, tz, force: bool) -> str:
         print(f"[{pid}] 🧪 DRY-RUN: upload YouTube/Facebook dilewati. Video: {final}")
         return f"[{pid}] DRY-RUN video tersimpan: {final}"
 
-    vid = upload_youtube.upload(final, data, merged_cfg.get("privacy", "private"))
+    slot = _next_slot(merged_cfg, merged_cfg["country"])
+    vid = upload_youtube.upload(final, data, merged_cfg.get("privacy", "private"), publish_at=slot[0] if slot else None)
     db.log_post(merged_cfg["country"], topic["id"], data["title"], vid)
-    print(f"[{pid}] ✅ Terupload: https://youtube.com/shorts/{vid}")
+    if slot:
+        _log_sched(merged_cfg["country"], slot[0], vid)
+    print(f"[{pid}] ✅ Terupload: https://youtube.com/shorts/{vid}" + (f" (tayang publik {slot[1]})" if slot else ""))
 
     if used_pending_trivia:
         db.clear_pending_trivia()
@@ -138,7 +141,7 @@ def _process_one_profile(profile: dict, cfg: dict, tz, force: bool) -> str:
         except Exception as e:  # noqa: BLE001
             print(f"[{pid}] Facebook gagal: {e}")
 
-    return f"[{pid}] https://youtube.com/shorts/{vid} — {data['title']} (privacy: {merged_cfg.get('privacy', 'private')})"
+    return f"[{pid}] https://youtube.com/shorts/{vid} — {data['title']} ({'tayang ' + slot[1] if slot else 'privacy: ' + merged_cfg.get('privacy', 'private')})"
 
 
 COLOR_DEFAULTS = {
@@ -150,29 +153,51 @@ COLOR_DEFAULTS = {
 }
 
 
-_SLOT_N = 0
+_LAST_SLOT = None
 
 
-def _next_slot(ccfg: dict):
-    """Jadwal tayang color_mix. config color_mix: "schedule_times": ["06:30"], "schedule_tz": "Asia/Jakarta".
-    Mengembalikan (RFC3339 UTC, teks lokal) atau None bila jadwal tidak dipakai. Video ke-n dalam satu run mengambil slot ke-n."""
-    global _SLOT_N
-    times = ccfg.get("schedule_times") or []
+def _last_sched(country: str):
+    """Waktu tayang terjauh yang sudah terjadwal (dari run sebelumnya), dibaca dari catatan SCHED_<negara> di database."""
+    try:
+        vals = [dt.datetime.fromisoformat(t.replace("Z", "+00:00")) for t in db.used_topics("SCHED_" + country)]
+        return max(vals) if vals else None
+    except Exception as e:  # noqa: BLE001
+        print(f"ℹ️ Riwayat jadwal tidak terbaca ({str(e)[:80]}). Slot dihitung tanpa riwayat.")
+        return None
+
+
+def _log_sched(country: str, iso: str, vid: str) -> None:
+    try:
+        db.log_post("SCHED_" + country, iso, "jadwal tayang", vid)
+    except Exception as e:  # noqa: BLE001
+        print(f"⚠️ Jadwal tidak tercatat di database ({str(e)[:80]}). Video tetap terjadwal di YouTube.")
+
+
+def _next_slot(cfg: dict, country: str):
+    """Jadwal tayang YouTube. Kunci config: "schedule_times": ["12:00","19:00"], "schedule_tz": "America/New_York".
+    Mengembalikan (RFC3339 UTC, teks lokal) atau None bila jadwal tidak dipakai. Slot selalu SESUDAH slot terjauh yang sudah ada,
+    jadi tidak bentrok antar-run maupun antar-video."""
+    global _LAST_SLOT
+    times = cfg.get("schedule_times") or []
     if not times:
         return None
-    tz = ZoneInfo(ccfg.get("schedule_tz", "Asia/Jakarta"))
+    tz = ZoneInfo(cfg.get("schedule_tz", "Asia/Jakarta"))
     now = dt.datetime.now(tz)
-    slots = []
-    for day in range(0, 30):
+    floor = now + dt.timedelta(minutes=20)  # YouTube butuh waktu tayang di masa depan
+    for prev in (_LAST_SLOT, _last_sched(country)):
+        if prev is not None and prev.astimezone(tz) > floor:
+            floor = prev.astimezone(tz)
+    pick = None
+    for day in range(0, 40):
         for t in sorted(times):
             hh, mm = (int(x) for x in t.split(":"))
-            s = (now + dt.timedelta(days=day)).replace(hour=hh, minute=mm, second=0, microsecond=0)
-            if s > now + dt.timedelta(minutes=20):  # YouTube butuh waktu tayang di masa depan
-                slots.append(s)
-        if len(slots) > _SLOT_N:
+            sl = (now + dt.timedelta(days=day)).replace(hour=hh, minute=mm, second=0, microsecond=0)
+            if sl > floor:
+                pick = sl
+                break
+        if pick:
             break
-    pick = slots[_SLOT_N]
-    _SLOT_N += 1
+    _LAST_SLOT = pick
     return pick.astimezone(dt.timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ"), pick.strftime("%d %b %H:%M ") + str(tz)
 
 
@@ -233,8 +258,10 @@ def _process_versus(item: str, ccfg: dict, suggest_used: set) -> str:
         _manual_ref(pid, tid, data, final)
         return f"[{pid}] DRY-RUN video tersimpan: {final}"
 
-    slot = _next_slot(ccfg)
+    slot = _next_slot(ccfg, ccfg["log_country"])
     vid = upload_youtube.upload(final, data, ccfg["privacy"], ccfg["token_env"], publish_at=slot[0] if slot else None)
+    if slot:
+        _log_sched(ccfg["log_country"], slot[0], vid)
     print(f"[{pid}] ✅ Terupload: https://youtube.com/shorts/{vid}" + (f" (tayang publik {slot[1]})" if slot else ""))
     suggest_used.add(tid)
     try:
@@ -285,8 +312,10 @@ def _process_color(item: str, ccfg: dict, suggest_used: set) -> str:
         _manual_ref(pid, tid, data, final)
         return f"[{pid}] DRY-RUN video tersimpan: {final}"
 
-    slot = _next_slot(ccfg)
+    slot = _next_slot(ccfg, ccfg["log_country"])
     vid = upload_youtube.upload(final, data, ccfg["privacy"], ccfg["token_env"], publish_at=slot[0] if slot else None)
+    if slot:
+        _log_sched(ccfg["log_country"], slot[0], vid)
     print(f"[{pid}] ✅ Terupload: https://youtube.com/shorts/{vid}" + (f" (tayang publik {slot[1]})" if slot else ""))
     suggest_used.add(tid)
     try:

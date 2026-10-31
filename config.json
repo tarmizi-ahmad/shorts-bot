@@ -6,6 +6,8 @@
   "peak_hours": [12, 19],
   "max_posts_per_day": 2,
   "privacy": "private",
+  "schedule_times": ["12:00", "19:00"],
+  "schedule_tz": "America/New_York",
   "color_mix": {
     "style": "kids",
     "made_for_kids": false,
