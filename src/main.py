@@ -2,6 +2,7 @@
 import datetime as dt
 import json
 import os
+import re
 import sys
 import traceback
 from zoneinfo import ZoneInfo
@@ -173,13 +174,20 @@ def _log_sched(country: str, iso: str, vid: str) -> None:
         print(f"⚠️ Jadwal tidak tercatat di database ({str(e)[:80]}). Video tetap terjadwal di YouTube.")
 
 
+def _hm(t: str):
+    hh, mm = re.split(r"[:.]", str(t).strip())  # toleran: "14:30" maupun "14.30"
+    return int(hh), int(mm)
+
+
 def _next_slot(cfg: dict, country: str):
-    """Jadwal tayang YouTube. Kunci config: "schedule_times": ["12:00","19:00"], "schedule_tz": "America/New_York".
+    """Jadwal tayang YouTube. Kunci config: "schedule_times": ["06:30"], "schedule_weekend_times": ["07:30","20:30"],
+    "schedule_tz": "Asia/Jakarta". Sabtu/Minggu dihitung menurut zona schedule_tz. Tanpa weekend_times, jam weekday dipakai tiap hari.
     Mengembalikan (RFC3339 UTC, teks lokal) atau None bila jadwal tidak dipakai. Slot selalu SESUDAH slot terjauh yang sudah ada,
     jadi tidak bentrok antar-run maupun antar-video."""
     global _LAST_SLOT
-    times = cfg.get("schedule_times") or []
-    if not times:
+    weekday = cfg.get("schedule_times") or []
+    weekend = cfg.get("schedule_weekend_times") or weekday
+    if not weekday and not weekend:
         return None
     tz = ZoneInfo(cfg.get("schedule_tz", "Asia/Jakarta"))
     now = dt.datetime.now(tz)
@@ -189,16 +197,17 @@ def _next_slot(cfg: dict, country: str):
             floor = prev.astimezone(tz)
     pick = None
     for day in range(0, 40):
-        for t in sorted(times):
-            hh, mm = (int(x) for x in t.split(":"))
-            sl = (now + dt.timedelta(days=day)).replace(hour=hh, minute=mm, second=0, microsecond=0)
+        d0 = now + dt.timedelta(days=day)
+        times = weekend if d0.weekday() >= 5 else weekday
+        for hh, mm in sorted(_hm(t) for t in times):
+            sl = d0.replace(hour=hh, minute=mm, second=0, microsecond=0)
             if sl > floor:
                 pick = sl
                 break
         if pick:
             break
     _LAST_SLOT = pick
-    return pick.astimezone(dt.timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ"), pick.strftime("%d %b %H:%M ") + str(tz)
+    return pick.astimezone(dt.timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ"), pick.strftime("%a %d %b %H:%M ") + str(tz)
 
 
 def color_cfg(cfg: dict) -> dict:
@@ -212,7 +221,7 @@ def _manual_ref(pid: str, tid: str, data: dict, final: str) -> None:
            f"select 'COLOR', {q(tid)}, {q(data['title'])}, null\n"
            f"where not exists (select 1 from posts where country = 'COLOR' and topic_id = {q(tid)});")
     tags = ", ".join(data.get("tags", []))
-    block = (f"## {tid}\n\nVideo: {final}\n\n### Judul\n```\n{data['title']}\n```\n\n"
+    block = (f"## {tid}\n\nVideo: {final}\n\n### Judul\n```\n{data['title']} #shorts\n```\n\n"
              f"### Deskripsi\n```\n{data['description']}\n```\n\n### Tag\n```\n{tags}\n```\n\n"
              f"### SQL (jalankan SETELAH video diupload manual)\n```sql\n{sql}\n```\n\n")
     print("\n" + block)
@@ -325,22 +334,61 @@ def _process_color(item: str, ccfg: dict, suggest_used: set) -> str:
     return f"[{pid}] https://youtube.com/shorts/{vid} — {data['title']} ({'tayang ' + slot[1] if slot else 'privacy: ' + ccfg['privacy']})"
 
 
+def _color_topic(item: str) -> str:
+    """ID catatan untuk satu item: warna tunggal atau 'A vs B'."""
+    if colorvs.is_versus(item):
+        return colorvs.pair_topic(item)
+    return colormix.topic_id(colormix.parse_color(item)[0])
+
+
 def _color_jobs(cfg: dict, ccfg: dict, dry_run: bool):
-    """Daftar (id, fungsi) untuk mode color_mix. Kolom warna kosong = ambil otomatis dari daftar populer."""
+    """Daftar (id, fungsi) untuk mode color_mix.
+    - Kolom warna diisi: item yang sudah ada di database dilewati (kecuali FORCE=1), sisanya dibatasi max_per_run.
+    - Kolom kosong: otomatis 1 video warna tunggal + 1 video versus (bila max_per_run >= 2) yang belum pernah dibuat."""
     try:
         used = set(db.used_topics(ccfg["log_country"]))
     except Exception as e:  # noqa: BLE001
         print(f"⚠️ Riwayat warna tidak terbaca ({str(e)[:100]}). Lanjut tanpa riwayat.")
         used = set()
-    items = colormix.requested_colors(os.environ.get("COLORS", ""), int(ccfg["max_per_run"]))
-    if not items:
+    limit = int(ccfg["max_per_run"])
+    force = os.environ.get("FORCE") == "1"
+    raw = colormix.requested_colors(os.environ.get("COLORS", ""), 50)
+    items = []
+    if raw:
+        for it in raw:
+            try:
+                tid = _color_topic(it)
+            except ValueError as e:
+                print(f"⚠️ Dilewati: {e}")
+                continue
+            if tid in used and not force:
+                print(f"⏭️ '{it}' sudah pernah dibuat (tercatat di database). Dilewati. Pakai force untuk membuat ulang.")
+                continue
+            items.append(it)
+        if len(items) > limit:
+            print(f"⚠️ {len(items)} item, dibatasi {limit} per run. Sisanya diabaikan.")
+        items = items[:limit]
+    else:
         taken = set(used)
-        for _ in range(int(ccfg["max_per_run"])):
-            nxt = colormix.pick_next(taken)
+        single = colormix.pick_any(taken)
+        pair = colorvs.pick_pair(taken)
+        if single:
+            items.append(single)
+            taken.add(colormix.topic_id(single))
+        if pair and len(items) < limit:
+            items.append(pair)
+            taken.add(colorvs.pair_topic(pair))
+        while len(items) < limit:  # salah satu jenis habis: isi dengan jenis yang masih ada
+            nxt = colormix.pick_any(taken)
+            if nxt:
+                items.append(nxt)
+                taken.add(colormix.topic_id(nxt))
+                continue
+            nxt = colorvs.pick_pair(taken)
             if not nxt:
                 break
-            items.append(nxt[0])
-            taken.add(colormix.topic_id(nxt[0]))
+            items.append(nxt)
+            taken.add(colorvs.pair_topic(nxt))
         print(f"ℹ️ Kolom warna kosong, otomatis memilih: {items}")
     return [(f"{ccfg['id']}:{it}", (lambda it=it: _process_color(it, ccfg, used))) for it in items]
 

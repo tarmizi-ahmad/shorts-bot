@@ -14,6 +14,34 @@ ING_COL = {**cm.PAINT_COL}
 SCR = ("red", "green", "blue")
 
 
+# Pasangan yang mirip / sering dikira sama (antrean otomatis). Urutan = prioritas.
+VS_PAIRS = [
+    "banana vs lemon", "orange vs peach", "teal vs turquoise", "pink vs coral", "purple vs violet",
+    "strawberry vs cherry", "gold vs sunshine", "lime vs grass", "magenta vs plum", "mint vs seafoam",
+    "lavender vs lilac", "navy vs midnight", "sky vs cyan", "olive vs avocado", "brown vs chocolate",
+    "beige vs cream", "rust vs copper", "apple vs ruby", "pumpkin vs carrot", "mango vs tangerine",
+    "honey vs amber", "forest vs emerald", "jade vs emerald", "coffee vs chocolate", "sapphire vs denim",
+    "rose vs raspberry", "flamingo vs bubblegum", "blush vs melon", "cottoncandy vs bubblegum", "kiwi vs lime",
+    "grape vs plum", "blueberry vs periwinkle", "ocean vs denim", "sunset vs coral", "bronze vs copper",
+    "watermelon vs flamingo", "sand vs beige", "olive vs sage", "maroon vs ruby", "caramel vs cinnamon",
+]
+
+
+def pair_topic(item: str) -> str:
+    a, b = build(item)
+    return topic_id(a, b)
+
+
+def pick_pair(used: set):
+    for item in VS_PAIRS:
+        try:
+            if pair_topic(item) not in used:
+                return item
+        except ValueError:
+            continue
+    return None
+
+
 def is_versus(item: str) -> bool:
     return bool(SPLIT.search(item or ""))
 
@@ -89,7 +117,7 @@ def generate(a: dict, b: dict) -> dict:
     def short(c):
         return ", ".join(f"{c['paint'][k]}% {k}" for k in ING if k in c["paint_keys"] and c["paint"][k] > 0)
     sc = lambda c: f"red {c['screen']['red']}%, green {c['screen']['green']}%, blue {c['screen']['blue']}%"
-    title = f"{A} vs {B}: What's the Difference? \U0001F3A8 #shorts"[:100]
+    title = f"{A} vs {B} Color: What's the Difference? \U0001F3A8"[:90]  # upload menambahkan " #Shorts"
     desc = (
         f"{A} vs {B}: what is the difference?\n\n"
         f"\U0001F3A8 {A.upper()} ({a['hex']})\nPaint (estimate): {short(a)}\nScreen (RGB): {sc(a)}\n\n"
@@ -100,7 +128,8 @@ def generate(a: dict, b: dict) -> dict:
     )
     return {
         "title": title, "description": desc,
-        "tags": [A.lower(), B.lower(), f"{A.lower()} vs {B.lower()}", "color mixing", "learn colors", "color difference"],
+        "tags": [A.lower(), B.lower(), f"{A.lower()} vs {B.lower()}", f"{A.lower()} vs {B.lower()} color", f"how to mix {A.lower()}",
+                 f"how to mix {B.lower()}", "color mixing", "learn colors", "color difference"],
         "scenes": [{"kind": k, "narration": texts[k], "image_prompt": ""} for k in ("hook", "paint", "screen", "diff", "outro")],
         "_diff_lines": [d for d, _ in ds],
     }

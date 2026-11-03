@@ -104,6 +104,14 @@ def topic_id(label: str) -> str:
     return "color:" + re.sub(r"[^a-z0-9#]+", "", label.lower())
 
 
+def pick_any(used: set):
+    """Warna tunggal berikutnya yang belum pernah dibuat: daftar populer dulu, lalu nama tambahan (EXTRA)."""
+    for name in list(FRIENDLY) + list(EXTRA):
+        if topic_id(name) not in used:
+            return name
+    return None
+
+
 def pick_next(used: set):
     for name in POPULAR:
         if topic_id(name) not in used:
@@ -314,19 +322,17 @@ def make_meta(c: dict, paint_line: str, screen_line: str) -> tuple:
     """Judul, deskripsi, tag. Pola judul bergantian per warna (stabil), semuanya memuat nama warna di depan."""
     lab, hx = c["label"], c["hex"]
     parts = _main_parts(c)
+    # Pola "How to Mix ... Paint" terbukti paling banyak dicari (1.1K-1.3K views); pola tanpa kata kunci ("X = ? Secret") hanya belasan views.
+    how = f"How to Mix {lab} Paint \U0001F3A8 ({parts})" if parts else f"How to Mix {lab} Paint \U0001F3A8"
     patterns = [
-        f"What Colors Make {lab}? \U0001F3A8",
-        f"How to Mix {lab} Paint \U0001F3A8 ({parts})" if parts else f"How to Mix {lab} Paint \U0001F3A8",
-        f"{lab} = ? The Secret Color Recipe!",
-        f"Mix {lab} in 10 Seconds \U0001F58C\uFE0F",
-        f"Can You Guess the Mix for {lab}? \U0001F914",
+        how, how, how,
+        f"What Colors Make {lab}? \U0001F3A8 {lab} Color Mix",
+        f"How to Make {lab} Color \U0001F3A8 ({parts})" if parts else f"How to Make {lab} Color \U0001F3A8",
     ]
     idx = sum(ord(ch) for ch in lab) % len(patterns)
-    title = (patterns[idx] + " #shorts")[:95]
-    if len(title) > 100:
-        title = title[:100]
+    title = patterns[idx][:90]  # upload menambahkan " #Shorts"
     desc = (
-        f"What colors make {lab}? Here is the exact recipe.\n\n"
+        f"How to mix {lab} paint: what colors make {lab}? Here is the exact recipe.\n\n"
         f"\U0001F3A8 PAINT MIX (estimate)\n{paint_line}\n\n"
         f"\U0001F4BB SCREEN MIX (RGB)\n{screen_line}\n\n"
         f"Hex code: {hx}\n\n"
@@ -370,7 +376,8 @@ def generate(c: dict, style: str = "kids") -> dict:
     title, desc = make_meta(c, paint_line, screen_line)
     return {
         "title": title, "description": desc,
-        "tags": tags + ["color mixing", "learn colors", c["label"].lower()],
+        "tags": tags + [f"how to mix {c['label'].lower()}", f"{c['label'].lower()} color mix", f"what colors make {c['label'].lower()}",
+                        "color mixing", "learn colors", c["label"].lower()],
         "scenes": [{"kind": k, "narration": texts[k], "image_prompt": ""}
                    for k in ("hook", "paint", "screen", "fact", "outro")],
     }
