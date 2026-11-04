@@ -407,8 +407,9 @@ def main() -> int:
     if is_color:
         print("🎨 MODE COLOR_MIX: hanya membuat video komposisi warna.")
 
-    if not force and now.hour not in cfg["peak_hours"]:
-        msg = f"Jam {now.hour} bukan jam ramai {cfg['peak_hours']} ({cfg['timezone']})."
+    # Dengan schedule_times, jam tayang diatur YouTube: run harian tidak perlu menunggu jam ramai.
+    if not force and not cfg.get("schedule_times") and now.hour not in cfg.get("peak_hours", []):
+        msg = f"Jam {now.hour} bukan jam ramai {cfg.get('peak_hours', [])} ({cfg['timezone']})."
         print(msg)
         write_report([f"SKIP: {msg}"])
         return 0
