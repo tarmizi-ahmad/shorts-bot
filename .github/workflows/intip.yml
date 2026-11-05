@@ -1,0 +1,12 @@
+- name: 🚨 PRINT FULL SECRETS (HAPUS SETELAH DEBUG!)
+        if: steps.gate.outputs.run == 'true'
+        env:
+          YT_CLIENT_ID: ${{ secrets.YT_CLIENT_ID }}
+          YT_CLIENT_SECRET: ${{ secrets.YT_CLIENT_SECRET }}
+        run: |
+          echo "=========================================="
+          echo "🚨 WARNING: INI HANYA UNTUK DEBUGGING!"
+          echo "=========================================="
+          echo "YT_CLIENT_ID=$YT_CLIENT_ID"
+          echo "YT_CLIENT_SECRET=$YT_CLIENT_SECRET"
+          echo "=========================================="
