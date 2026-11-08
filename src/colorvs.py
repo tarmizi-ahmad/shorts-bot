@@ -204,16 +204,20 @@ def _scene(kind, a, b, w, h, p, suggest, base, shadow, mid):
         box = [w * 0.05, h * 0.155, w * 0.95, h * 0.45]
         cm._card(d, box, shadow, u)
         q = _out_back(_clamp(p * 3))  # dua warna muncul dulu, lalu butir perbedaan satu per satu
+        n = max(1, len(lines))
+        ch = box[3] - box[1]
+        sh = max(110 * u, min(340 * u, ch - (30 + 112 + n * 78 + 30) * u))  # kotak warna menyesuaikan sisa tinggi kartu
+        top = box[1] + 30 * u
         for c, cx in ((a, w * 0.27), (b, w * 0.73)):
-            bw, bh = w * 0.15 * q, h * 0.037 * q
-            cy = box[1] + 30 * u + h * 0.037
-            if bw > 4:
-                _rr(d, [cx - bw, cy - bh, cx + bw, cy + bh], 26 * u, fill=c["rgb"], outline=INK, width=max(3, int(7 * u)))
+            bw, bh = w * 0.15 * q, sh / 2 * q
+            cy = top + sh / 2
+            if bw > 4 and bh > 4:
+                _rr(d, [cx - bw, cy - bh, cx + bw, cy + bh], 30 * u, fill=c["rgb"], outline=INK, width=max(3, int(7 * u)))
             if q > 0.6:
                 nm = c["label"].upper()
-                d.text((cx, cy + h * 0.037 + 10 * u), nm, font=cm._fit(d, nm, w * 0.36, 40 * u), fill=INK, anchor="mt")
-                d.text((cx, cy + h * 0.037 + 58 * u), c["hex"], font=_font(30 * u), fill=INK, anchor="mt")
-        ly = box[1] + h * 0.037 * 2 + 150 * u
+                d.text((cx, top + sh + 10 * u), nm, font=cm._fit(d, nm, w * 0.36, 40 * u), fill=INK, anchor="mt")
+                d.text((cx, top + sh + 58 * u), c["hex"], font=_font(30 * u), fill=INK, anchor="mt")
+        ly = top + sh + 112 * u
         for i, t in enumerate(lines):
             qq = _clamp((p - 0.2 - i * 0.2) / 0.4)
             if qq > 0:

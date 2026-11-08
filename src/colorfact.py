@@ -28,25 +28,40 @@ def split_themes(raw: str) -> list:
     return out
 
 
+class ThemeRejected(ValueError):
+    """Tema ditolak karena bukan tentang warna atau artikel sumbernya tidak cocok."""
+
+
+COLOR_WORDS = re.compile(r"colou?r|hue|pigment|wavelength|spectrum|rainbow|light|vision|paint|dye|"
+                         r"\b(?:red|green|blue|yellow|orange|purple|violet|pink|black|white|brown)\b", re.I)
+
+
 def english_query(theme: str) -> dict:
-    """Terjemah tema ke kata kunci Inggris untuk Wikipedia + label tampilan singkat."""
+    """Terjemah tema ke kata kunci Inggris untuk Wikipedia, label tampilan singkat, dan penilaian relevansi."""
     ai = cm._ask(
-        'Translate this video theme (may be Indonesian) into a concise English Wikipedia search query and a short display label.\n'
-        f'Theme: "{theme}"\n'
-        'Reply with JSON only: {"query": "<English search query, 1-4 words>", "label": "<display label, 1-3 words, Title Case>"}'
+        'You help a channel that only makes videos about COLOR (color science, color vision, color theory, color in art, '
+        'nature, culture, psychology, history of colors and pigments).\n'
+        f'Theme: "{theme}" (may be Indonesian)\n'
+        'Reply with JSON only: {"query": "<English Wikipedia search query, 1-4 words>", '
+        '"label": "<display label, 1-3 words, Title Case>", '
+        '"about_color": <true if the theme is really about color, otherwise false>}'
     ) or {}
     q = str(ai.get("query") or theme).strip()[:80]
     lab = str(ai.get("label") or q).strip()[:40]
-    return {"query": q, "label": lab}
+    flag = ai.get("about_color")
+    if isinstance(flag, str):
+        flag = flag.strip().lower() in ("true", "yes", "1")
+    return {"query": q, "label": lab, "about_color": flag if isinstance(flag, bool) else None}
 
 
 def wiki_source(query: str) -> tuple:
     """(judul artikel, teks) dari Wikipedia Inggris, atau ('', '') bila gagal."""
     try:
         r = requests.get(WIKI, headers=HEADERS, timeout=30, params={
-            "action": "query", "list": "search", "srsearch": query, "srlimit": 1, "format": "json"})
+            "action": "query", "list": "search", "srsearch": query, "srlimit": 5, "format": "json"})
         r.raise_for_status()
-        hits = r.json()["query"]["search"]
+        hits = [x for x in r.json()["query"]["search"]
+                if "disambiguation" not in x["title"].lower() and "may refer to" not in x.get("snippet", "").lower()]
         if not hits:
             return "", ""
         title = hits[0]["title"]
@@ -120,8 +135,14 @@ def _valid_fact(f: dict, source: str, lo: int, hi: int):
 
 def generate(theme: str, n_facts: int, long_mode: bool) -> dict:
     q = english_query(theme)
+    if q["about_color"] is False:
+        raise ThemeRejected(f"Tema '{theme}' ditolak: bukan tentang warna. Channel ini khusus fakta tentang warna "
+                            "(sains warna, penglihatan warna, seni, alam, budaya, sejarah pigmen).")
     src_title, source = wiki_source(q["query"])
     print(f"ℹ️ Tema '{theme}' -> pencarian '{q['query']}' -> sumber: {src_title or '(tidak ada)'} ({len(source)} karakter)")
+    if source and len(COLOR_WORDS.findall(source)) < 4:
+        raise ThemeRejected(f"Artikel Wikipedia yang ditemukan ('{src_title}') tampaknya tidak membahas warna, jadi tema '{theme}' "
+                            f"dihentikan agar tidak menghasilkan fakta yang salah. Coba kata kunci yang lebih spesifik, mis. '{q['label']} color'.")
     lo, hi = (22, 30) if long_mode else (18, 26)
     prompt = PROMPT.format(
         theme=f"{theme} ({q['query']})", source=source or "(empty)", n=n_facts, lo=lo, hi=hi,

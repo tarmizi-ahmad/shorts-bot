@@ -223,7 +223,8 @@ def _manual_ref(pid: str, tid: str, data: dict, final: str) -> None:
            f"select 'COLOR', {q(tid)}, {q(data['title'])}, null\n"
            f"where not exists (select 1 from posts where country = 'COLOR' and topic_id = {q(tid)});")
     tags = ", ".join(data.get("tags", []))
-    block = (f"## {tid}\n\nVideo: {final}\n\n### Judul\n```\n{data['title']} #shorts\n```\n\n"
+    src = f"Artikel sumber: {data['source']}\n\n" if data.get("source") else ""
+    block = (f"## {tid}\n\nVideo: {final}\n\n{src}### Judul\n```\n{data['title']} #shorts\n```\n\n"
              f"### Deskripsi\n```\n{data['description']}\n```\n\n### Tag\n```\n{tags}\n```\n\n"
              f"### SQL (jalankan SETELAH video diupload manual)\n```sql\n{sql}\n```\n\n")
     print("\n" + block)
@@ -413,7 +414,7 @@ def _process_fact(theme: str, ccfg: dict, used: set) -> str:
     if os.environ.get("UPLOAD_YOUTUBE") == "0":
         print(f"[{pid}] 🧪 DRY-RUN: upload dilewati. Video: {final}")
         _manual_ref(pid, tid, data, final)
-        return f"[{pid}] DRY-RUN video tersimpan: {final}"
+        return f"[{pid}] DRY-RUN video tersimpan: {final} | tema '{theme}' | artikel sumber: {data.get('source') or '(tidak ada)'}"
 
     slot = _next_slot(ccfg, ccfg["log_country"])
     vid = upload_youtube.upload(final, data, ccfg["privacy"], ccfg["token_env"], publish_at=slot[0] if slot else None)
@@ -425,7 +426,8 @@ def _process_fact(theme: str, ccfg: dict, used: set) -> str:
         db.log_post(ccfg["log_country"], tid, data["title"], vid)
     except Exception as e:  # noqa: BLE001
         print(f"[{pid}] ⚠️ Gagal mencatat ke database (video tetap terupload): {str(e)[:150]}")
-    return f"[{pid}] https://youtube.com/shorts/{vid} — {data['title']} ({'tayang ' + slot[1] if slot else 'privacy: ' + ccfg['privacy']})"
+    return (f"[{pid}] https://youtube.com/shorts/{vid} — {data['title']} ({'tayang ' + slot[1] if slot else 'privacy: ' + ccfg['privacy']})"
+            f" | tema '{theme}' | artikel sumber: {data.get('source') or '(tidak ada)'}")
 
 
 def _color_topic(item: str) -> str:
