@@ -16,6 +16,38 @@ WIKI = "https://en.wikipedia.org/w/api.php"
 MAX_SOURCE = 6000
 
 
+# Antrean tema otomatis (label tampilan, judul artikel Wikipedia). Urutan = prioritas. Dipakai bila kolom tema kosong.
+THEMES = [
+    ("Color Blindness", "Color blindness"), ("Why the Sky Is Blue", "Rayleigh scattering"), ("How Rainbows Form", "Rainbow"),
+    ("Color Psychology", "Color psychology"), ("Tetrachromacy", "Tetrachromacy"), ("Structural Colors in Nature", "Structural coloration"),
+    ("Tyrian Purple", "Tyrian purple"), ("Vantablack", "Vantablack"), ("The Dress Illusion", "The dress"),
+    ("Mantis Shrimp Vision", "Mantis shrimp"), ("Synesthesia", "Synesthesia"), ("Why Sunsets Are Red", "Sunset"),
+    ("Aurora Colors", "Aurora"), ("Why Leaves Are Green", "Chlorophyll"), ("Ultramarine", "Ultramarine"),
+    ("Egyptian Blue", "Egyptian blue"), ("Cochineal Red", "Cochineal"), ("Mauveine", "Mauveine"),
+    ("Scheele's Green", "Scheele's Green"), ("Primary Colors", "Primary color"), ("The Color Wheel", "Color wheel"),
+    ("RGB Colors", "RGB color model"), ("CMYK Printing", "CMYK color model"), ("Pantone Colors", "Pantone"),
+    ("The Color Red", "Red"), ("The Color Blue", "Blue"), ("The Color Yellow", "Yellow"), ("The Color Green", "Green"),
+    ("The Color Purple", "Purple"), ("The Color Pink", "Pink"), ("The Color Black", "Black"), ("The Color White", "White"),
+    ("False Color Images", "False color"), ("Color Temperature", "Color temperature"), ("Checker Shadow Illusion", "Checker shadow illusion"),
+    ("The Ishihara Test", "Ishihara test"), ("How We See Color", "Color vision"), ("Cone Cells", "Cone cell"),
+    ("Color Symbolism", "Color symbolism"), ("The Visible Spectrum", "Visible spectrum"),
+]
+
+
+def topic_for(query: str) -> str:
+    slug = re.sub(r"[^a-z0-9]+", "-", query.lower()).strip("-")[:50] or "theme"
+    return f"fact:{slug}"
+
+
+def pick_auto(used: set, taken: set):
+    """Tema otomatis berikutnya yang belum pernah dibuat (db) dan belum dicoba di run ini."""
+    for label, query in THEMES:
+        tid = topic_for(query)
+        if tid not in used and tid not in taken:
+            return label, query
+    return None
+
+
 # ------------------------------------------------------------------ sumber
 def split_themes(raw: str) -> list:
     """Tema dipisah titik koma, garis tegak, atau baris baru (koma boleh ada di dalam tema)."""
@@ -133,8 +165,9 @@ def _valid_fact(f: dict, source: str, lo: int, hi: int):
     return {"headline": head, "narration": nar, "color": col}, ""
 
 
-def generate(theme: str, n_facts: int, long_mode: bool) -> dict:
-    q = english_query(theme)
+def generate(theme: str, n_facts: int, long_mode: bool, preset=None) -> dict:
+    """preset = (label, judul artikel) dari antrean otomatis: melewati terjemahan AI dan memakai artikel itu langsung."""
+    q = {"query": preset[1], "label": preset[0], "about_color": True} if preset else english_query(theme)
     if q["about_color"] is False:
         raise ThemeRejected(f"Tema '{theme}' ditolak: bukan tentang warna. Channel ini khusus fakta tentang warna "
                             "(sains warna, penglihatan warna, seni, alam, budaya, sejarah pigmen).")
@@ -180,7 +213,6 @@ def generate(theme: str, n_facts: int, long_mode: bool) -> dict:
     if not title or len(title) > 80:
         title = f"{label}: Facts You Didn't Know"
     tags = [str(t).strip()[:30] for t in (ai.get("tags") or []) if str(t).strip()][:8]
-    slug = re.sub(r"[^a-z0-9]+", "-", q["query"].lower()).strip("-")[:50] or "theme"
     outro = ("Did you learn something new? Tap like, subscribe for more color facts, "
              "and comment which color topic we should explore next!") if long_mode else \
             "Like, subscribe, and comment which color topic we should explore next!"
@@ -195,7 +227,7 @@ def generate(theme: str, n_facts: int, long_mode: bool) -> dict:
     return {
         "title": title[:90], "description": desc,
         "tags": tags + ["color facts", "did you know", label.lower()],
-        "scenes": scenes, "topic_id": f"fact:{slug}", "label": label, "source": src_title,
+        "scenes": scenes, "topic_id": topic_for(q["query"]), "label": label, "source": src_title,
     }
 
 

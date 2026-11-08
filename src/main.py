@@ -374,20 +374,50 @@ def _used_color_topics(ccfg: dict) -> set:
 
 
 def _fact_jobs(ccfg: dict):
-    """Mode color_fact: tiap tema di kolom 'colors' (dipisah ; atau baris baru) menjadi satu video fakta."""
+    """Mode color_fact: tiap tema di kolom 'colors' (dipisah ; atau baris baru) menjadi satu video fakta.
+    Kolom kosong: otomatis memilih tema dari antrean THEMES yang belum pernah dibuat."""
     themes = colorfact.split_themes(os.environ.get("COLORS", ""))
     limit = int(ccfg["max_per_run"])
-    if len(themes) > limit:
-        print(f"⚠️ {len(themes)} tema, dibatasi {limit} per run. Sisanya diabaikan.")
     used = _used_color_topics(ccfg)
-    return [(f"color_fact:{t}", (lambda t=t: _process_fact(t, ccfg, used))) for t in themes[:limit]]
+    if themes:
+        if len(themes) > limit:
+            print(f"⚠️ {len(themes)} tema, dibatasi {limit} per run. Sisanya diabaikan.")
+        return [(f"color_fact:{t}", (lambda t=t: _process_fact(t, ccfg, used))) for t in themes[:limit]]
+    taken = set()
+    peek = []
+    probe = set(taken)
+    for _ in range(limit):
+        nxt = colorfact.pick_auto(used, probe)
+        if not nxt:
+            break
+        peek.append(nxt[0])
+        probe.add(colorfact.topic_for(nxt[1]))
+    print(f"ℹ️ Kolom tema kosong, otomatis memilih dari antrean: {peek}")
+    return [(f"color_fact:auto{i + 1}", (lambda: _auto_fact(ccfg, used, taken))) for i in range(len(peek))]
 
 
-def _process_fact(theme: str, ccfg: dict, used: set) -> str:
+def _auto_fact(ccfg: dict, used: set, taken: set) -> str:
+    """Ambil tema otomatis berikutnya; bila artikelnya tidak cocok atau faktanya kurang, coba tema berikutnya (maks 4 percobaan)."""
+    last = None
+    for _ in range(4):
+        nxt = colorfact.pick_auto(used, taken)
+        if not nxt:
+            break
+        taken.add(colorfact.topic_for(nxt[1]))
+        try:
+            return _process_fact(nxt[0], ccfg, used, preset=nxt)
+        except (colorfact.ThemeRejected, RuntimeError) as e:
+            last = e
+            print(f"⚠️ Tema otomatis '{nxt[0]}' dilewati: {str(e)[:150]}")
+    raise RuntimeError(f"Tidak ada tema otomatis yang berhasil dibuat. Terakhir: {str(last)[:150]}" if last else
+                       "Semua tema otomatis sudah pernah dibuat. Isi tema sendiri di kolom 'colors'.")
+
+
+def _process_fact(theme: str, ccfg: dict, used: set, preset=None) -> str:
     pid = "color_fact"
     long_mode = _color_length(ccfg) == "long"
     print(f"\n{'='*60}\n🎨 MEMULAI MODE: COLOR_FACT -> {theme} ({'60 detik' if long_mode else 'pendek'})\n{'='*60}")
-    data = colorfact.generate(theme, 4 if long_mode else 2, long_mode)
+    data = colorfact.generate(theme, 4 if long_mode else 2, long_mode, preset)
     tid = data["topic_id"]
     if tid in used and os.environ.get("FORCE") != "1":
         return f"[{pid}] ⏭️ '{theme}' sudah pernah dibuat ({tid} ada di database). Dilewati. Pakai force untuk membuat ulang."
@@ -568,7 +598,7 @@ def main() -> int:
                 break
 
     if not jobs:
-        results.append("Tema belum diisi: tulis tema di kolom 'colors' (mis. buta warna)." if is_fact else
+        results.append("Tidak ada tema yang bisa dibuat (antrean otomatis habis). Isi tema di kolom 'colors'." if is_fact else
                        "Tidak ada yang dikerjakan (daftar kosong). Semua warna populer sudah pernah dibuat?")
 
     write_report(results)
