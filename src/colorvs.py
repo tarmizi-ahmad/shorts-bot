@@ -203,13 +203,22 @@ def _scene(kind, a, b, w, h, p, suggest, base, shadow, mid):
         lines = a.get("_diff_lines") or []
         box = [w * 0.05, h * 0.155, w * 0.95, h * 0.45]
         cm._card(d, box, shadow, u)
+        q = _out_back(_clamp(p * 3))  # dua warna muncul dulu, lalu butir perbedaan satu per satu
+        for c, cx in ((a, w * 0.27), (b, w * 0.73)):
+            bw, bh = w * 0.15 * q, h * 0.037 * q
+            cy = box[1] + 30 * u + h * 0.037
+            if bw > 4:
+                _rr(d, [cx - bw, cy - bh, cx + bw, cy + bh], 26 * u, fill=c["rgb"], outline=INK, width=max(3, int(7 * u)))
+            if q > 0.6:
+                nm = c["label"].upper()
+                d.text((cx, cy + h * 0.037 + 10 * u), nm, font=cm._fit(d, nm, w * 0.36, 40 * u), fill=INK, anchor="mt")
+                d.text((cx, cy + h * 0.037 + 58 * u), c["hex"], font=_font(30 * u), fill=INK, anchor="mt")
+        ly = box[1] + h * 0.037 * 2 + 150 * u
         for i, t in enumerate(lines):
-            q = _clamp((p - i * 0.2) / 0.4)
-            if q > 0:
-                y = box[1] + 70 * u + i * 120 * u + (1 - _out_cubic(q)) * 30 * u
-                _center(d, t, y, w, 52 * u, INK, maxw=w * 0.84)
-        d.text((w * 0.27, box[3] - 40 * u), a["hex"], font=_font(34 * u), fill=INK, anchor="mm")
-        d.text((w * 0.73, box[3] - 40 * u), b["hex"], font=_font(34 * u), fill=INK, anchor="mm")
+            qq = _clamp((p - 0.2 - i * 0.2) / 0.4)
+            if qq > 0:
+                y = ly + i * 78 * u + (1 - _out_cubic(qq)) * 30 * u
+                _center(d, t, y, w, 44 * u, INK, maxw=w * 0.84)
     else:
         return cm._kid_scene("outro", mid, w, h, p, suggest, base, shadow).copy()
     return img

@@ -8,7 +8,7 @@ import sys
 import traceback
 from zoneinfo import ZoneInfo
 
-from . import colorlong, colormix, colorvs, db, history, images, mascot, notify, script_gen, trends, tts, upload_facebook, upload_youtube, video
+from . import colorfact, colorlong, colormix, colorvs, db, history, images, mascot, notify, script_gen, trends, tts, upload_facebook, upload_youtube, video
 
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 OUT_DIR = os.path.join(ROOT, "output")
@@ -364,6 +364,70 @@ def _process_color(item: str, ccfg: dict, suggest_used: set) -> str:
     return f"[{pid}] https://youtube.com/shorts/{vid} — {data['title']} ({'tayang ' + slot[1] if slot else 'privacy: ' + ccfg['privacy']})"
 
 
+def _used_color_topics(ccfg: dict) -> set:
+    try:
+        return set(db.used_topics(ccfg["log_country"]))
+    except Exception as e:  # noqa: BLE001
+        print(f"⚠️ Riwayat tidak terbaca ({str(e)[:100]}). Lanjut tanpa riwayat.")
+        return set()
+
+
+def _fact_jobs(ccfg: dict):
+    """Mode color_fact: tiap tema di kolom 'colors' (dipisah ; atau baris baru) menjadi satu video fakta."""
+    themes = colorfact.split_themes(os.environ.get("COLORS", ""))
+    limit = int(ccfg["max_per_run"])
+    if len(themes) > limit:
+        print(f"⚠️ {len(themes)} tema, dibatasi {limit} per run. Sisanya diabaikan.")
+    used = _used_color_topics(ccfg)
+    return [(f"color_fact:{t}", (lambda t=t: _process_fact(t, ccfg, used))) for t in themes[:limit]]
+
+
+def _process_fact(theme: str, ccfg: dict, used: set) -> str:
+    pid = "color_fact"
+    long_mode = _color_length(ccfg) == "long"
+    print(f"\n{'='*60}\n🎨 MEMULAI MODE: COLOR_FACT -> {theme} ({'60 detik' if long_mode else 'pendek'})\n{'='*60}")
+    data = colorfact.generate(theme, 4 if long_mode else 2, long_mode)
+    tid = data["topic_id"]
+    if tid in used and os.environ.get("FORCE") != "1":
+        return f"[{pid}] ⏭️ '{theme}' sudah pernah dibuat ({tid} ada di database). Dilewati. Pakai force untuk membuat ulang."
+    data["category"] = ccfg["category"]
+    data["made_for_kids"] = bool(ccfg.get("made_for_kids", False))
+    out = os.path.join(OUT_DIR, pid, re.sub(r"[^a-z0-9]+", "_", tid.lower()))
+    os.makedirs(out, exist_ok=True)
+    cal = mascot.prepare("modern", "Colors", os.path.join(out, "cal"))
+    w, h = ccfg["width"], ccfg["height"]
+    clips = []
+    for i, sc in enumerate(data["scenes"]):
+        aud, clip = (os.path.join(out, f"s{i}.{e}") for e in ("mp3", "mp4"))
+        tts.make_voice(sc["narration"], ccfg["voice"], aud)
+        fdir = os.path.join(out, f"f{i}")
+        src = colorfact.render(sc, data["label"], fdir, w, h, video._duration(aud) + 0.3)
+        video.make_clip(src, aud, clip, w, h, sc["narration"], cal, None, zoom=False, frames=True, fps_in=colorlong.FPS)
+        shutil.rmtree(fdir, ignore_errors=True)
+        clips.append(clip)
+        print(f"[{pid}] Scene {i + 1}/{len(data['scenes'])} selesai ({sc['kind']})")
+    final = os.path.join(out, "final.mp4")
+    video.concat(clips, os.path.join(out, "list.txt"), final)
+    print(f"[{pid}] Durasi video: {video._duration(final):.1f} detik")
+
+    if os.environ.get("UPLOAD_YOUTUBE") == "0":
+        print(f"[{pid}] 🧪 DRY-RUN: upload dilewati. Video: {final}")
+        _manual_ref(pid, tid, data, final)
+        return f"[{pid}] DRY-RUN video tersimpan: {final}"
+
+    slot = _next_slot(ccfg, ccfg["log_country"])
+    vid = upload_youtube.upload(final, data, ccfg["privacy"], ccfg["token_env"], publish_at=slot[0] if slot else None)
+    if slot:
+        _log_sched(ccfg["log_country"], slot[0], vid)
+    print(f"[{pid}] ✅ Terupload: https://youtube.com/shorts/{vid}" + (f" (tayang publik {slot[1]})" if slot else ""))
+    used.add(tid)
+    try:
+        db.log_post(ccfg["log_country"], tid, data["title"], vid)
+    except Exception as e:  # noqa: BLE001
+        print(f"[{pid}] ⚠️ Gagal mencatat ke database (video tetap terupload): {str(e)[:150]}")
+    return f"[{pid}] https://youtube.com/shorts/{vid} — {data['title']} ({'tayang ' + slot[1] if slot else 'privacy: ' + ccfg['privacy']})"
+
+
 def _color_topic(item: str) -> str:
     """ID catatan untuk satu item: warna tunggal atau 'A vs B'."""
     if colorvs.is_versus(item):
@@ -428,14 +492,15 @@ def main() -> int:
     tz = ZoneInfo(cfg["timezone"])
     now = dt.datetime.now(tz)
     kind = (os.environ.get("PROFILE_KIND") or "history").strip().lower()
-    is_color = kind == "color_mix"
+    is_fact = kind == "color_fact"
+    is_color = kind in ("color_mix", "color_fact")
     dry_run = os.environ.get("UPLOAD_YOUTUBE") == "0"
     # color_mix selalu dijalankan manual: cek jam ramai & kuota harian dilewati. Dry-run juga tidak memposting.
     force = os.environ.get("FORCE") == "1" or dry_run or is_color
     if dry_run:
         print("🧪 MODE DRY-RUN: video dibuat tapi TIDAK diunggah ke YouTube/Facebook.")
     if is_color:
-        print("🎨 MODE COLOR_MIX: hanya membuat video komposisi warna.")
+        print("🎨 MODE COLOR_FACT: video fakta tentang tema warna." if is_fact else "🎨 MODE COLOR_MIX: hanya membuat video komposisi warna.")
 
     # Dengan schedule_times, jam tayang diatur YouTube: run harian tidak perlu menunggu jam ramai.
     if not force and not cfg.get("schedule_times") and now.hour not in cfg.get("peak_hours", []):
@@ -467,7 +532,7 @@ def main() -> int:
             return 1
 
     if is_color:
-        jobs = _color_jobs(cfg, ccfg, dry_run)
+        jobs = _fact_jobs(ccfg) if is_fact else _color_jobs(cfg, ccfg, dry_run)
     else:
         profiles = cfg.get("profiles")
         if not profiles:
@@ -501,10 +566,11 @@ def main() -> int:
                 break
 
     if not jobs:
-        results.append("Tidak ada yang dikerjakan (daftar kosong). Semua warna populer sudah pernah dibuat?")
+        results.append("Tema belum diisi: tulis tema di kolom 'colors' (mis. buta warna)." if is_fact else
+                       "Tidak ada yang dikerjakan (daftar kosong). Semua warna populer sudah pernah dibuat?")
 
     write_report(results)
-    write_summary("Hasil run" + (" color_mix" if is_color else "") + (" (dry-run)" if dry_run else ""), results)
+    write_summary("Hasil run" + (f" {kind}" if is_color else "") + (" (dry-run)" if dry_run else ""), results)
 
     ok_count = sum(1 for r in results if "https://youtube.com/shorts/" in r or "DRY-RUN video" in r)
     print(f"\n🏁 SELESAI. Total video sukses: {ok_count}/{len(jobs)}")
@@ -513,7 +579,7 @@ def main() -> int:
     # Kegagalan sengaja tidak dikirim dari sini: run ditandai GAGAL (exit 1) dan GitHub yang mengirim email.
     up = sum(1 for r in results if "https://youtube.com/shorts/" in r)
     if up and not dry_run:
-        tag = "Shorts-ai color_mix" if is_color else "Shorts-ai"
+        tag = f"Shorts-ai {kind}" if is_color else "Shorts-ai"
         if up == len(jobs):
             subject = f"✅ {tag}: {up} video berhasil diupload"
         else:

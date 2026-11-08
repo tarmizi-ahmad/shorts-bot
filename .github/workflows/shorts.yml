@@ -13,13 +13,14 @@ on:
         options:
           - history
           - color_mix
+          - color_fact
         default: history
       colors:
-        description: "Khusus color_mix: dipisah koma. Warna tunggal (orange, teal, #336699) atau perbandingan (banana vs lemon, peach vs orange). Kosong = otomatis dari daftar populer"
+        description: "color_mix: warna tunggal (orange, teal, #336699) atau perbandingan (banana vs lemon), dipisah koma; kosong = otomatis. color_fact: TEMA tentang warna (mis. buta warna), dipisah titik koma"
         type: string
         default: ""
       length:
-        description: "Khusus color_mix: durasi video (long = sekitar 60 detik, short = pendek sekitar 30 detik)"
+        description: "Untuk color_mix dan color_fact: durasi video (long = sekitar 60 detik, short = pendek sekitar 30 detik)"
         type: choice
         options:
           - long
@@ -50,7 +51,7 @@ jobs:
       - name: Cek gerbang run
         id: gate
         env:
-          BYPASS: ${{ (github.event_name == 'workflow_dispatch' && (inputs.force || !inputs.upload_youtube || inputs.mode == 'color_mix')) && '1' || '0' }}
+          BYPASS: ${{ (github.event_name == 'workflow_dispatch' && (inputs.force || !inputs.upload_youtube || inputs.mode == 'color_mix' || inputs.mode == 'color_fact')) && '1' || '0' }}
         run: |
           python3 - <<'PY'
           import datetime as dt, json, os
