@@ -2,12 +2,13 @@
 import datetime as dt
 import json
 import os
+import shutil
 import re
 import sys
 import traceback
 from zoneinfo import ZoneInfo
 
-from . import colormix, colorvs, db, history, images, mascot, notify, script_gen, trends, tts, upload_facebook, upload_youtube, video
+from . import colorlong, colormix, colorvs, db, history, images, mascot, notify, script_gen, trends, tts, upload_facebook, upload_youtube, video
 
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 OUT_DIR = os.path.join(ROOT, "output")
@@ -150,6 +151,7 @@ COLOR_DEFAULTS = {
     "privacy": "private", "token_env": "YT_REFRESH_TOKEN", "max_per_run": 2, "category": "27",
     "log_country": "COLOR",  # dicatat terpisah supaya tidak memakan kuota harian video sejarah
     "style": "kids",         # "kids" = cerah & beranimasi, "clean" = tampilan gelap polos
+    "length": "long",        # "long" = sekitar 60 detik, animasi terus bergerak, ditutup ajakan like/subscribe/comment; "short" = versi lama
     "made_for_kids": False,  # True bila video memang ditujukan untuk anak (lihat catatan kebijakan YouTube)
 }
 
@@ -237,6 +239,12 @@ def _manual_ref(pid: str, tid: str, data: dict, final: str) -> None:
         print(f"⚠️ Gagal menulis referensi manual: {e}")
 
 
+def _color_length(ccfg: dict) -> str:
+    """Pilihan saat run Actions (COLOR_LENGTH) menang atas config.json; default 'long' (sekitar 60 detik)."""
+    v = (os.environ.get("COLOR_LENGTH") or ccfg.get("length") or "long").strip().lower()
+    return "short" if v.startswith("short") else "long"
+
+
 def _process_versus(item: str, ccfg: dict, suggest_used: set) -> str:
     """color_mix 'A vs B': video perbedaan dua warna."""
     pid = ccfg["id"]
@@ -251,16 +259,27 @@ def _process_versus(item: str, ccfg: dict, suggest_used: set) -> str:
     cal = mascot.prepare("modern", "Colors", os.path.join(out, "cal"))
     suggest = colormix.suggestions(a["label"], suggest_used)
     w, h = ccfg["width"], ccfg["height"]
+    long_mode = _color_length(ccfg) == "long"
+    if long_mode:
+        data["scenes"] = colorlong.vs_scenes(a, b, data)
     clips = []
     for i, sc in enumerate(data["scenes"]):
         aud, clip = (os.path.join(out, f"s{i}.{e}") for e in ("mp3", "mp4"))
-        src = colorvs.render(sc["kind"], a, b, os.path.join(out, f"f{i}"), w, h, suggest, diff_lines=data["_diff_lines"])
+        fdir = os.path.join(out, f"f{i}")
         tts.make_voice(sc["narration"], ccfg["voice"], aud)
-        video.make_clip(src, aud, clip, w, h, sc["narration"], cal, None, zoom=False, frames=True)
+        if long_mode:
+            dur = video._duration(aud)
+            src = colorlong.vs_render(sc["kind"], a, b, fdir, w, h, dur + 0.3, suggest, data["_diff_lines"])
+            video.make_clip(src, aud, clip, w, h, sc["narration"], cal, None, zoom=False, frames=True, fps_in=colorlong.FPS)
+            shutil.rmtree(fdir, ignore_errors=True)
+        else:
+            src = colorvs.render(sc["kind"], a, b, fdir, w, h, suggest, diff_lines=data["_diff_lines"])
+            video.make_clip(src, aud, clip, w, h, sc["narration"], cal, None, zoom=False, frames=True)
         clips.append(clip)
         print(f"[{pid}] Scene {i + 1}/{len(data['scenes'])} selesai ({sc['kind']})")
     final = os.path.join(out, "final.mp4")
     video.concat(clips, os.path.join(out, "list.txt"), final)
+    print(f"[{pid}] Durasi video: {video._duration(final):.1f} detik")
 
     if os.environ.get("UPLOAD_YOUTUBE") == "0":
         print(f"[{pid}] 🧪 DRY-RUN: upload dilewati. Video: {final}")
@@ -300,16 +319,27 @@ def _process_color(item: str, ccfg: dict, suggest_used: set) -> str:
     suggest = colormix.suggestions(label, suggest_used)
 
     w, h = ccfg["width"], ccfg["height"]
+    long_mode = style == "kids" and _color_length(ccfg) == "long"
+    if long_mode:
+        data["scenes"] = colorlong.scenes(c, data)
     clips = []
     for i, sc in enumerate(data["scenes"]):
         img, aud, clip = (os.path.join(out, f"s{i}.{e}") for e in ("png", "mp3", "mp4"))
-        if style == "kids":
-            src = colormix.render_kids(sc["kind"], c, os.path.join(out, f"f{i}"), w, h, suggest)
+        if long_mode:
+            tts.make_voice(sc["narration"], ccfg["voice"], aud)
+            dur = video._duration(aud)
+            fdir = os.path.join(out, f"f{i}")
+            src = colorlong.render(sc["kind"], c, fdir, w, h, dur + 0.3, suggest)
+            video.make_clip(src, aud, clip, w, h, sc["narration"], cal, None, zoom=False, frames=True, fps_in=colorlong.FPS)
+            shutil.rmtree(fdir, ignore_errors=True)  # bingkai panjang memakai banyak ruang
         else:
-            colormix.render_scene(sc["kind"], c, img, w, h, suggest)
-            src = img
-        tts.make_voice(sc["narration"], ccfg["voice"], aud)
-        video.make_clip(src, aud, clip, w, h, sc["narration"], cal, None, zoom=False, frames=(style == "kids"))
+            if style == "kids":
+                src = colormix.render_kids(sc["kind"], c, os.path.join(out, f"f{i}"), w, h, suggest)
+            else:
+                colormix.render_scene(sc["kind"], c, img, w, h, suggest)
+                src = img
+            tts.make_voice(sc["narration"], ccfg["voice"], aud)
+            video.make_clip(src, aud, clip, w, h, sc["narration"], cal, None, zoom=False, frames=(style == "kids"))
         clips.append(clip)
         print(f"[{pid}] Scene {i + 1}/{len(data['scenes'])} selesai ({sc['kind']})")
 

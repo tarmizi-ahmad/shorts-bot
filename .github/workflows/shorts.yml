@@ -18,6 +18,13 @@ on:
         description: "Khusus color_mix: dipisah koma. Warna tunggal (orange, teal, #336699) atau perbandingan (banana vs lemon, peach vs orange). Kosong = otomatis dari daftar populer"
         type: string
         default: ""
+      length:
+        description: "Khusus color_mix: durasi video (long = sekitar 60 detik, short = pendek sekitar 30 detik)"
+        type: choice
+        options:
+          - long
+          - short
+        default: long
       force:
         description: "Abaikan cek jam ramai & kuota (untuk tes, mode history)"
         type: boolean
@@ -90,6 +97,7 @@ jobs:
         env:
           PROFILE_KIND: ${{ inputs.mode || 'history' }}
           COLORS: ${{ inputs.colors || '' }}
+          COLOR_LENGTH: ${{ inputs.length || '' }}
           FORCE: ${{ inputs.force && '1' || '0' }}
           UPLOAD_YOUTUBE: ${{ (github.event_name == 'workflow_dispatch' && !inputs.upload_youtube) && '0' || '1' }}
           YOUTUBE_API_KEY: ${{ secrets.YOUTUBE_API_KEY }}
