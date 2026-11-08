@@ -79,7 +79,7 @@ def _year_filter(year, h: int) -> str:
 
 
 def make_clip(image: str, audio: str, out: str, w: int, h: int, text: str = "",
-              cal: dict | None = None, year=None, zoom: bool = True, frames: bool = False) -> None:
+              cal: dict | None = None, year=None, zoom: bool = True, frames: bool = False, fps_in: int = 30) -> None:
     """cal = hasil mascot.prepare(); bila None, klip tanpa maskot. zoom=False: latar diam (untuk grafik/angka).
     frames=True: image adalah pola urutan bingkai (mis. dir/f_%03d.png) yang diperpanjang sampai audio selesai."""
     dur = _duration(audio)
@@ -102,7 +102,7 @@ def make_clip(image: str, audio: str, out: str, w: int, h: int, text: str = "",
             f"[0:v]scale={w}:{h}:force_original_aspect_ratio=increase,"
             f"crop={w}:{h},fps=30,format=yuv420p"
         )
-    inputs = ["-framerate", "30", "-i", image] if frames else ["-loop", "1", "-framerate", "30", "-i", image]
+    inputs = ["-framerate", str(fps_in), "-i", image] if frames else ["-loop", "1", "-framerate", "30", "-i", image]
     graph, last = [], "bg"
 
     if cal:
