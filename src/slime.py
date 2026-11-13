@@ -1104,7 +1104,7 @@ def _mk_lab2():
         smalls=[dict(cx=a, top=b, base=c_, hw=d_) for a, b, c_, d_ in sm],
         slots=lambda n: {1: [2], 2: [1, 3], 3: [0, 2, 4], 4: [0, 1, 3, 4]}.get(n, [0, 1, 2, 3, 4][:n]),
         big=dict(poly=lambda: _rb_poly(763, 1240, 1536, 88, 38), base=1536, fmax=232, entry=(763, 1232), glow=(763, 1420, 190), ry=22),
-        slime=dict(cx=480, gy=1350, us=1.0), orb=(480, 840), ctl_y=770, label="below", behind=True,
+        slime=dict(cx=480, gy=1350, us=1.0), orb=(480, 840), ctl_y=770, label="above", behind=True,
         mix_target=(763, 1200), res="jar")
 
 
@@ -1176,10 +1176,57 @@ def make_voice_track(c, workdir, voice="en_US-lessac-medium", pitch=VOICE_PITCH,
             synth(text, raw)
             af = f"asetrate={int(44100 * pitch)},aresample=44100,atempo={1 / pitch:.5f}" if abs(pitch - 1) > 0.01 else "anull"
             subprocess.run(["ffmpeg", "-y", "-loglevel", "error", "-i", raw, "-af", af, "-ar", "44100", "-ac", "1", fin], check=True)
-            out[cid] = dict(path=fin, dur=_wav_dur(fin), off=off)
+            out[cid] = dict(path=fin, dur=_wav_dur(fin), off=off, text=text)
         except Exception as e:  # noqa: BLE001
             print(f"⚠️ Suara '{cid}' gagal dibuat, segmen ini tanpa narasi: {str(e)[:120]}")
     return out
+
+
+_CAPTIONS = []   # [(mulai, selesai, durasi_suara, teks)] diisi render(); kosong = pakai caption bawaan
+
+
+def set_captions(segs, voice):
+    """Subtitle mengikuti narasi: tampil saat kalimat diucapkan, kata yang sedang diucapkan disorot."""
+    _CAPTIONS.clear()
+    for kind, key, t0, dur in segs:
+        cid = f"ling:{key}" if kind == "ling" else kind
+        v = (voice or {}).get(cid)
+        if v:
+            st = t0 + v["off"]
+            _CAPTIONS.append((st, st + v["dur"] + 0.3, v["dur"], v["text"].replace(" percent", "%")))
+
+
+def draw_subtitle(d, w, h, u, t, y_frac=0.865):
+    cur = next((cp for cp in _CAPTIONS if cp[0] <= t <= cp[1]), None)
+    if not cur:
+        return False
+    st, en, vd, text = cur
+    words = text.split()
+    f = _font(54 * u)
+    sp = f.getlength(" ")
+    maxw = w * 0.88
+    lines, line, lw = [], [], 0.0
+    for i, wd in enumerate(words):
+        wl = f.getlength(wd)
+        if line and lw + sp + wl > maxw:
+            lines.append(line)
+            line, lw = [], 0.0
+        line.append((i, wd, wl))
+        lw += (sp if len(line) > 1 else 0) + wl
+    lines.append(line)
+    p = clamp((t - st) / max(vd, 0.1), 0, 1)
+    now = min(len(words) - 1, int(p * len(words)))
+    lh = 70 * u
+    y0 = h * y_frac - (len(lines) - 1) * lh / 2
+    for li, ln in enumerate(lines):
+        tot = sum(x[2] for x in ln) + sp * (len(ln) - 1)
+        x = w / 2 - tot / 2
+        y = y0 + li * lh
+        for i, wd, wl in ln:
+            col = GOLD if i == now and t <= en - 0.3 else (255, 255, 255)
+            d.text((x, y), wd, font=f, fill=col, anchor="lm", stroke_width=max(3, int(7 * u)), stroke_fill=INK)
+            x += wl + sp
+    return True
 
 
 def _load_wav(path):
@@ -1537,7 +1584,10 @@ def frame_lab(t, c, segs, total, bg, w, h):
     else:
         cap = {"intro": f"Let's make {c['label']} together!", "mix": f"Mix them in the {L['res']}...",
                "reveal": f"Ta-da! {c['label']}!", "cta": "Which color next? Comment!"}[kind]
-    stext(d, (w / 2, h * 0.925), cap, 56 * u, stroke=7 * u)
+    if _CAPTIONS:
+        draw_subtitle(d, w, h, u, t)     # narasi aktif: hanya subtitle sinkron suara (tanpa caption bawaan)
+    else:
+        stext(d, (w / 2, h * 0.925), cap, 56 * u, stroke=7 * u)
     return img
 
 
@@ -1720,6 +1770,7 @@ def render(c, out_path, w=1080, h=1920, sound=True, bg_image=None, narration=Non
         vt = make_voice_track(c, wd, narration.get("voice") or "en_US-lessac-medium", float(narration.get("pitch") or VOICE_PITCH),
                               narration.get("synth")) or None
     segs, total = tl(c, vt) if tl is timeline_lab else tl(c)
+    set_captions(segs, vt)
     bg = make_bg(c, w, h, bg_image=bg_image)
     n = int(total * FPS)
     tmp = out_path + ".wav"
@@ -1744,11 +1795,12 @@ def render(c, out_path, w=1080, h=1920, sound=True, bg_image=None, narration=Non
     return total
 
 
-def sample_frames(c, outdir, times, w=540, h=960, bg_image=None):
+def sample_frames(c, outdir, times, w=540, h=960, bg_image=None, voice=None):
     set_layout(bg_image)
     os.makedirs(outdir, exist_ok=True)
     tl, fr = (timeline_lab, frame_lab) if bg_image else (timeline, frame)
-    segs, total = tl(c)
+    segs, total = tl(c, voice) if tl is timeline_lab else tl(c)
+    set_captions(segs, voice)
     bg = make_bg(c, w, h, bg_image=bg_image)
     for t in times:
         fr(t, c, segs, total, bg, w, h).save(os.path.join(outdir, f"s_{t:05.2f}.png"))
