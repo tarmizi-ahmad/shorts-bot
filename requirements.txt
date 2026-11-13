@@ -4,3 +4,4 @@ google-auth
 piper-tts
 gTTS
 Pillow>=10.0.0
+numpy>=1.24

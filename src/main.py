@@ -8,7 +8,7 @@ import sys
 import traceback
 from zoneinfo import ZoneInfo
 
-from . import colorfact, colorlong, colormix, colorvs, db, history, images, mascot, notify, script_gen, trends, tts, upload_facebook, upload_youtube, video
+from . import colorfact, colorlong, colormix, colorvs, db, history, images, mascot, notify, script_gen, slime, trends, tts, upload_facebook, upload_youtube, video
 
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 OUT_DIR = os.path.join(ROOT, "output")
@@ -519,20 +519,135 @@ def _color_jobs(cfg: dict, ccfg: dict, dry_run: bool):
     return [(f"{ccfg['id']}:{it}", (lambda it=it: _process_color(it, ccfg, used))) for it in items]
 
 
+# ------------------------------------------------------------------ mode slime_mix (animasi tanpa suara)
+def slime_cfg(cfg: dict) -> dict:
+    """Pengaturan slime_mix: dasarnya sama dengan color_mix (token, jadwal, privasi), bisa ditimpa lewat blok "slime_mix" di config.json."""
+    return {**color_cfg(cfg), "id": "slime_mix", "max_per_run": 1, "narration": True, "voice_pitch": 1.3, **cfg.get("slime_mix", {})}
+
+
+def _slime_topic(label: str) -> str:
+    return "slime:" + colormix.topic_id(label)   # dicatat terpisah dari video color_mix biasa
+
+
+def _slime_pick(taken: set):
+    """Warna berikutnya (2-4 bahan) yang belum dibuat sebagai video slime."""
+    for name in list(colormix.FRIENDLY) + list(colormix.EXTRA):
+        label, spoken, rgb = colormix.parse_color(name)
+        if _slime_topic(label) in taken:
+            continue
+        if len(colormix.composition(label, spoken, rgb)["paint_keys"]) >= 2:
+            return name
+    return None
+
+
+def _slime_narration(ccfg: dict):
+    """Pengaturan narasi untuk slime.render (None = video tanpa suara). Kunci config: "narration": true/false, "voice", "voice_pitch"."""
+    if not ccfg.get("narration", True):
+        return None
+    return {"voice": ccfg.get("voice"), "pitch": float(ccfg.get("voice_pitch", 1.3))}
+
+
+def _slime_meta(c: dict, ccfg: dict) -> dict:
+    paint_line, screen_line = colormix._lines(c)
+    title, desc = colormix.make_meta(c, paint_line, screen_line)
+    lab = c["label"]
+    desc = desc.replace("Here is the exact recipe.", "Watch the little slime wizard mix it step by step!" if ccfg.get("narration", True)
+                        else "Watch the little slime wizard mix it step by step - no talking, just magic!", 1)
+    return {
+        "title": title, "description": desc,
+        "tags": ["color mixing", "how to mix colors", f"how to make {lab.lower()}", f"{lab.lower()} color mix", "slime", "satisfying",
+                 "learn colors", "art for kids", lab.lower()],
+        "category": ccfg["category"], "made_for_kids": bool(ccfg.get("made_for_kids", False)),
+    }
+
+
+def _process_slime(item: str, ccfg: dict, used: set) -> str:
+    pid = ccfg["id"]
+    label, spoken, rgb = colormix.parse_color(item)
+    c = colormix.composition(label, spoken, rgb)
+    tid = _slime_topic(label)
+    print(f"\n{'='*60}\n\U0001F9D9 MEMULAI MODE: {pid.upper()} -> {label} ({c['hex']})\n{'='*60}")
+    print(f"[{pid}] Cat: {c['paint']}")
+    if len(c["paint_keys"]) < 2:
+        print(f"[{pid}] ⚠️ '{label}' hanya 1 bahan cat; videonya akan sangat singkat.")
+    data = _slime_meta(c, ccfg)
+    out = os.path.join(OUT_DIR, pid, tid.replace(":", "_").replace("#", "x"))
+    os.makedirs(out, exist_ok=True)
+    final = os.path.join(out, "final.mp4")
+    narr = _slime_narration(ccfg) if slime.DEFAULT_BG else None   # narasi hanya untuk tata letak latar gambar
+    dur = slime.render(c, final, ccfg["width"], ccfg["height"], bg_image=slime.DEFAULT_BG, narration=narr)
+    shutil.rmtree(os.path.join(out, "vo"), ignore_errors=True)
+    print(f"[{pid}] Video selesai ({dur:.1f} detik, {'dengan narasi' if narr else 'tanpa narasi'}): {final}")
+
+    if os.environ.get("UPLOAD_YOUTUBE") == "0":
+        print(f"[{pid}] 🧪 DRY-RUN: upload dilewati. Video: {final}")
+        _manual_ref(pid, tid, data, final)
+        return f"[{pid}] DRY-RUN video tersimpan: {final}"
+
+    slot = _next_slot(ccfg, ccfg["log_country"])
+    vid = upload_youtube.upload(final, data, ccfg["privacy"], ccfg["token_env"], publish_at=slot[0] if slot else None)
+    if slot:
+        _log_sched(ccfg["log_country"], slot[0], vid)
+    print(f"[{pid}] ✅ Terupload: https://youtube.com/shorts/{vid}" + (f" (tayang publik {slot[1]})" if slot else ""))
+    used.add(tid)
+    try:
+        db.log_post(ccfg["log_country"], tid, data["title"], vid)
+    except Exception as e:  # noqa: BLE001
+        print(f"[{pid}] ⚠️ Gagal mencatat ke database (video tetap terupload): {str(e)[:150]}")
+    return f"[{pid}] https://youtube.com/shorts/{vid} — {data['title']} ({'tayang ' + slot[1] if slot else 'privacy: ' + ccfg['privacy']})"
+
+
+def _slime_jobs(ccfg: dict):
+    """Kolom colors diisi: tiap warna tunggal (versus diabaikan), yang sudah ada di database dilewati kecuali FORCE=1.
+    Kolom kosong: otomatis warna 2-4 bahan yang belum pernah dibuat. Dibatasi max_per_run."""
+    used = _used_color_topics(ccfg)
+    limit = int(ccfg["max_per_run"])
+    force = os.environ.get("FORCE") == "1"
+    raw = colormix.requested_colors(os.environ.get("COLORS", ""), 50)
+    items = []
+    if raw:
+        for it in raw:
+            if colorvs.is_versus(it):
+                print(f"⚠️ '{it}' dilewati: slime_mix hanya untuk warna tunggal.")
+                continue
+            try:
+                tid = _slime_topic(colormix.parse_color(it)[0])
+            except ValueError as e:
+                print(f"⚠️ Dilewati: {e}")
+                continue
+            if tid in used and not force:
+                print(f"⏭️ '{it}' sudah pernah dibuat sebagai video slime. Dilewati. Pakai force untuk membuat ulang.")
+                continue
+            items.append(it)
+        items = items[:limit]
+    else:
+        taken = set(used)
+        while len(items) < limit:
+            nxt = _slime_pick(taken)
+            if not nxt:
+                break
+            items.append(nxt)
+            taken.add(_slime_topic(colormix.parse_color(nxt)[0]))
+        print(f"ℹ️ Kolom warna kosong, otomatis memilih: {items}")
+    return [(f"{ccfg['id']}:{it}", (lambda it=it: _process_slime(it, ccfg, used))) for it in items]
+
+
 def main() -> int:
     cfg = load_cfg()
     tz = ZoneInfo(cfg["timezone"])
     now = dt.datetime.now(tz)
     kind = (os.environ.get("PROFILE_KIND") or "history").strip().lower()
     is_fact = kind == "color_fact"
-    is_color = kind in ("color_mix", "color_fact")
+    is_slime = kind == "slime_mix"
+    is_color = kind in ("color_mix", "color_fact", "slime_mix")
     dry_run = os.environ.get("UPLOAD_YOUTUBE") == "0"
     # color_mix selalu dijalankan manual: cek jam ramai & kuota harian dilewati. Dry-run juga tidak memposting.
     force = os.environ.get("FORCE") == "1" or dry_run or is_color
     if dry_run:
         print("🧪 MODE DRY-RUN: video dibuat tapi TIDAK diunggah ke YouTube/Facebook.")
     if is_color:
-        print("🎨 MODE COLOR_FACT: video fakta tentang tema warna." if is_fact else "🎨 MODE COLOR_MIX: hanya membuat video komposisi warna.")
+        print("🎨 MODE COLOR_FACT: video fakta tentang tema warna." if is_fact else
+              "🧙 MODE SLIME_MIX: animasi slime penyihir tanpa suara." if is_slime else "🎨 MODE COLOR_MIX: hanya membuat video komposisi warna.")
 
     # Dengan schedule_times, jam tayang diatur YouTube: run harian tidak perlu menunggu jam ramai.
     if not force and not cfg.get("schedule_times") and now.hour not in cfg.get("peak_hours", []):
@@ -547,7 +662,7 @@ def main() -> int:
         write_report(["SKIP: Kuota harian tercapai"])
         return 0
 
-    ccfg = color_cfg(cfg)
+    ccfg = slime_cfg(cfg) if is_slime else color_cfg(cfg)
     if not dry_run:
         # Cek token YouTube dulu: kalau mati, jangan buang kuota Gemini/Cloudflare untuk video yang tak bisa diunggah.
         token_env = ccfg["token_env"] if is_color else "YT_REFRESH_TOKEN"
@@ -564,7 +679,7 @@ def main() -> int:
             return 1
 
     if is_color:
-        jobs = _fact_jobs(ccfg) if is_fact else _color_jobs(cfg, ccfg, dry_run)
+        jobs = _fact_jobs(ccfg) if is_fact else _slime_jobs(ccfg) if is_slime else _color_jobs(cfg, ccfg, dry_run)
     else:
         profiles = cfg.get("profiles")
         if not profiles:
