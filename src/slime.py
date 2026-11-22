@@ -123,6 +123,7 @@ def draw_bubble(d, cx, cy, r, fill):
         d.ellipse((cx + k * r * .42 - r * .1, cy - r * .3, cx + k * r * .42 + r * .1, cy - r * .1), fill=(255, 255, 255))
 
 
+LAB2_DY = -180   # lab2: gambar assets/lab_bg2.png SUDAH digeser 180px ke atas (di file-nya) agar 5 toples tidak tertutup UI Shorts; koordinat layout mengikuti
 HORIZON = 0.60  # garis pertemuan dinding & lantai (fraksi tinggi)
 
 
@@ -1099,13 +1100,15 @@ def _mk_lab1():
 
 
 def _mk_lab2():
+    D = LAB2_DY
     sm = [(263, 1462, 1600, 38), (357, 1458, 1590, 38), (446, 1452, 1578, 36), (530, 1450, 1572, 36), (616, 1448, 1568, 36)]
     return dict(
-        smalls=[dict(cx=a, top=b, base=c_, hw=d_) for a, b, c_, d_ in sm],
+        smalls=[dict(cx=a, top=b + D, base=c_ + D, hw=d_) for a, b, c_, d_ in sm],
         slots=lambda n: {1: [2], 2: [1, 3], 3: [0, 2, 4], 4: [0, 1, 3, 4]}.get(n, [0, 1, 2, 3, 4][:n]),
-        big=dict(poly=lambda: _rb_poly(763, 1240, 1536, 88, 38), base=1536, fmax=232, entry=(763, 1232), glow=(763, 1420, 190), ry=22),
-        slime=dict(cx=480, gy=1350, us=1.0), orb=(480, 840), ctl_y=770, label="above", behind=True,
-        mix_target=(763, 1200), res="jar")
+        big=dict(poly=lambda: _rb_poly(763, 1240 + D, 1536 + D, 88, 38), base=1536 + D, fmax=232, entry=(763, 1232 + D),
+                 glow=(763, 1420 + D, 190), ry=22),
+        slime=dict(cx=480, gy=1350 + D, us=1.0), orb=(480, 700 + D), ctl_y=770 + D, label="above", behind=True,
+        mix_target=(763, 1200 + D), res="jar")
 
 
 LAYOUTS = {}
@@ -1183,20 +1186,31 @@ def make_voice_track(c, workdir, voice="en_US-lessac-medium", pitch=VOICE_PITCH,
 
 
 _CAPTIONS = []   # [(mulai, selesai, durasi_suara, teks)] diisi render(); kosong = pakai caption bawaan
+LAST_CUES = []   # [(id, mulai, selesai, teks_en)] untuk berkas subtitle YouTube (SRT)
+
+
+def caption_cues():
+    return list(LAST_CUES)
 
 
 def set_captions(segs, voice):
     """Subtitle mengikuti narasi: tampil saat kalimat diucapkan, kata yang sedang diucapkan disorot."""
     _CAPTIONS.clear()
+    LAST_CUES.clear()
     for kind, key, t0, dur in segs:
         cid = f"ling:{key}" if kind == "ling" else kind
         v = (voice or {}).get(cid)
         if v:
             st = t0 + v["off"]
             _CAPTIONS.append((st, st + v["dur"] + 0.3, v["dur"], v["text"].replace(" percent", "%")))
+            LAST_CUES.append((cid, st, st + v["dur"] + 0.3, v["text"].replace(" percent", "%")))
 
 
-def draw_subtitle(d, w, h, u, t, y_frac=0.865):
+SUB_Y = 0.365   # subtitle di atas topi (zona aman: bagian bawah layar tertutup UI Shorts)
+
+
+def draw_subtitle(d, w, h, u, t, y_frac=None):
+    y_frac = SUB_Y if y_frac is None else y_frac
     cur = next((cp for cp in _CAPTIONS if cp[0] <= t <= cp[1]), None)
     if not cur:
         return False
@@ -1568,26 +1582,26 @@ def frame_lab(t, c, segs, total, bg, w, h):
             else:
                 d.ellipse((xx, y, xx + sz, y + sz), fill=CONFETTI[i % 6])
     if kind == "cta":
-        row_y = h * 0.36
+        row_y = h * 0.325
         for i, (lab, fn, colr) in enumerate((("LIKE", draw_heart, (240, 70, 90)), ("SUBSCRIBE", draw_bell, (255, 170, 30)),
                                               ("COMMENT", draw_bubble, (70, 140, 250)))):
             cx_ = w * (0.2 + 0.3 * i)
             pulse = 1 + 0.16 * max(0.0, math.sin((lt - i * 0.7) * 5)) if lt > i * 0.7 else 1
             ap = clamp(ease_out_back((lt - i * 0.25) / 0.4), 0, 1.2)
-            R = 88 * u * clamp(ap, 0, 1)
+            R = 68 * u * clamp(ap, 0, 1)
             d.ellipse((cx_ - R, row_y - R + 6 * u, cx_ + R, row_y + R + 6 * u), fill=INK)
             d.ellipse((cx_ - R, row_y - R, cx_ + R, row_y + R), fill=(255, 255, 255))
-            fn(d, cx_, row_y, 62 * u * pulse * ap * .85, colr)
-            stext(d, (cx_, row_y + 118 * u), lab, 38 * u * clamp(ap, 0, 1), fill=(255, 255, 255), stroke=6 * u)
+            fn(d, cx_, row_y, 48 * u * pulse * ap * .85, colr)
+            stext(d, (cx_, row_y + 92 * u), lab, 32 * u * clamp(ap, 0, 1), fill=(255, 255, 255), stroke=6 * u)
     if kind == "ling":
         cap = f"Summon the {key} magic!" if lt < 1.8 else f"Fill the jar: {c['paint'][key]}% {key}"
     else:
         cap = {"intro": f"Let's make {c['label']} together!", "mix": f"Mix them in the {L['res']}...",
                "reveal": f"Ta-da! {c['label']}!", "cta": "Which color next? Comment!"}[kind]
     if _CAPTIONS:
-        draw_subtitle(d, w, h, u, t)     # narasi aktif: hanya subtitle sinkron suara (tanpa caption bawaan)
+        draw_subtitle(d, w, h, u, t, y_frac=0.44 if kind == "cta" else None)     # narasi aktif: hanya subtitle sinkron suara (tanpa caption bawaan)
     else:
-        stext(d, (w / 2, h * 0.925), cap, 56 * u, stroke=7 * u)
+        stext(d, (w / 2, h * (0.44 if kind == "cta" else SUB_Y)), cap, 56 * u, stroke=7 * u)
     return img
 
 
