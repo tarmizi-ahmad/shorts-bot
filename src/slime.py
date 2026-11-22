@@ -1318,6 +1318,140 @@ def _bez(p0, pc, p1, k):
     return (a * p0[0] + b * pc[0] + e * p1[0], a * p0[1] + b * pc[1] + e * p1[1])
 
 
+# ================================================================== EFEK LATAR BERGERAK (lab2)
+# koordinat ruang 1080 x 1920 pada gambar assets/lab_bg2.png (sudah digeser). Semua efek tanpa-state: fungsi dari waktu t.
+BG_FX = True
+_GL, _PF = {}, {}
+
+
+def _hash(i, k=0):
+    v = math.sin(i * 12.9898 + k * 78.233) * 43758.5453
+    return v - math.floor(v)
+
+
+def _glow_sprite(r, col):
+    key = (r, col)
+    if key not in _GL:
+        n = 2 * r
+        yy, xx = np.mgrid[0:n, 0:n]
+        a = np.exp(-(((xx - r + .5) ** 2 + (yy - r + .5) ** 2) / (r * r)) * 3.2)
+        arr = (a[..., None] * np.array(col, dtype=np.float64)[None, None, :]).clip(0, 255).astype(np.uint8)
+        _GL[key] = Image.fromarray(arr, "RGB")
+    return _GL[key]
+
+
+def _add_glow(img, cx, cy, r, col, k):
+    """Cahaya aditif (screen-ish): k = intensitas 0..1."""
+    r = max(2, int(r))
+    if k <= 0.01:
+        return
+    sp = _glow_sprite(r, col)
+    k = min(1.0, k)
+    sp = sp.point([int(i * k) for i in range(256)] * 3)
+    x0, y0 = int(cx - r), int(cy - r)
+    bx0, by0, bx1, by1 = max(0, x0), max(0, y0), min(img.width, x0 + 2 * r), min(img.height, y0 + 2 * r)
+    if bx1 <= bx0 or by1 <= by0:
+        return
+    sub = sp.crop((bx0 - x0, by0 - y0, bx1 - x0, by1 - y0))
+    img.paste(ImageChops.add(img.crop((bx0, by0, bx1, by1)), sub), (bx0, by0))
+
+
+def _puff(r):
+    if r not in _PF:
+        n = 2 * r
+        yy, xx = np.mgrid[0:n, 0:n]
+        a = np.exp(-(((xx - r + .5) ** 2 + (yy - r + .5) ** 2) / (r * r)) * 2.6)
+        _PF[r] = Image.fromarray((a * 255).astype(np.uint8), "L")
+    return _PF[r]
+
+
+def _flick(t, i, fast=True):
+    if fast:
+        v = 0.78 + 0.22 * math.sin(t * 7.3 + i * 2.1) * math.sin(t * 11.7 + i * 5.3) + 0.10 * math.sin(t * 23.0 + i * 1.7)
+    else:
+        v = 0.88 + 0.10 * math.sin(t * 2.1 + i) + 0.05 * math.sin(t * 5.3 + i * 3.0)
+    return max(0.35, min(1.1, v))
+
+
+FX_LANTERNS = [(687, 215, 175, (255, 165, 60), 0.55), (970, 305, 115, (255, 165, 60), 0.5), (50, 390, 75, (210, 90, 255), 0.35)]
+FX_CANDLES = [(53, 548), (457, 538), (916, 650), (963, 752), (184, 1015), (515, 1022)]
+FX_BOTTLES = [(829, 429, (255, 230, 60)), (875, 424, (255, 80, 130)), (780, 440, (255, 190, 60)), (524, 496, (80, 255, 120)),
+              (557, 511, (255, 70, 70)), (763, 531, (90, 255, 120)), (797, 536, (200, 255, 80)), (837, 531, (255, 70, 70)),
+              (875, 527, (255, 70, 90)), (724, 607, (170, 90, 255)), (749, 607, (255, 90, 220)), (800, 609, (255, 80, 80)),
+              (511, 593, (255, 170, 60)), (540, 593, (255, 110, 200)), (576, 597, (255, 160, 50)), (595, 660, (90, 255, 120)),
+              (527, 677, (170, 90, 255)), (549, 773, (200, 100, 255)), (576, 757, (80, 180, 255)), (857, 673, (255, 170, 50)),
+              (825, 680, (255, 220, 70)), (67, 843, (200, 255, 80)), (103, 877, (255, 70, 70)), (33, 867, (255, 160, 50)),
+              (197, 771, (255, 160, 50)), (240, 763, (255, 190, 80)), (1053, 800, (90, 255, 120))]
+
+
+def bg_fx(img, t, u):
+    """1 kedip lampu/lilin, 2 asap kuali, 3 debu cahaya, 4 denyut cahaya ramuan. Digambar di atas latar, sebelum karakter."""
+    S = lambda v: v * u
+    # 1) lentera & lilin berkedip
+    for i, (x, y, r, col, k) in enumerate(FX_LANTERNS):
+        _add_glow(img, S(x), S(y), S(r), col, k * _flick(t, i, fast=False))
+    for i, (x, y) in enumerate(FX_CANDLES):
+        f = _flick(t, i + 3)
+        _add_glow(img, S(x), S(y), S(62), (255, 175, 70), 0.55 * f)
+        _add_glow(img, S(x), S(y - 6), S(20), (255, 235, 170), 0.55 * f)
+    # api & kuali
+    _add_glow(img, S(353), S(1060), S(185), (255, 110, 25), 0.50 * _flick(t, 40))
+    _add_glow(img, S(345), S(838), S(170), (200, 255, 80), 0.42 + 0.14 * math.sin(t * 2.6))
+    _add_glow(img, S(345), S(832), S(80), (255, 240, 120), 0.35 + 0.25 * math.sin(t * 4.1 + 1.0) ** 2)
+    # 4) cahaya ramuan berdenyut
+    for i, (x, y, col) in enumerate(FX_BOTTLES):
+        per = 2.4 + 2.2 * _hash(i, 3)
+        ph = 0.5 + 0.5 * math.sin(2 * math.pi * t / per + i * 1.9)
+        _add_glow(img, S(x), S(y), S(40), col, 0.10 + 0.34 * ph * ph)
+    # 2) asap kuali: kepulan berbentuk kerucut/segitiga (sempit di mulut kuali, melebar ke atas), menguap & memudar ke atas
+    NP, PER, RISE = 44, 8.0, 470
+    for i in range(NP):
+        tl = ((t + i * PER / NP) % PER) / PER                  # 0 = di mulut kuali, 1 = puncak (hilang)
+        lane = (_hash(i, 31) * 2 - 1) * 0.9                    # posisi lateral relatif dlm kerucut (-1..1)
+        half = 14 + 150 * tl ** 0.9                            # setengah lebar kerucut membesar ke atas
+        x = 345 + 0.16 * RISE * tl + lane * half + 16 * math.sin(t * 0.9 + i * 1.7 + tl * 4.0) * tl
+        y = 836 - RISE * tl
+        r = int(S(26 + 78 * tl))
+        a = min(1.0, tl / 0.10) * (1 - tl) ** 1.2 * 0.62      # muncul halus di bawah, memudar ke atas
+        if a < 0.01:
+            continue
+        m = _puff(max(2, r)).point([int(v * a) for v in range(256)])
+        low = max(0.0, 1 - tl * 3.0)                           # dekat mulut kuali tersinari api (kehijauan-kuning)
+        col = (int(238 + (205 - 238) * low), int(232 + (255 - 232) * low), int(240 + (150 - 240) * low))
+        img.paste(Image.new("RGB", m.size, col), (int(S(x) - r), int(S(y) - r)), m)
+    # botol kuning/oranye di meja: halo + inti berdenyut + gelembung naik + percikan dari leher botol
+    fk = 0.5 + 0.5 * math.sin(t * 2.2)
+    _add_glow(img, S(950), S(1185), S(210), (255, 170, 40), 0.30 + 0.20 * fk)
+    _add_glow(img, S(950), S(1190), S(95), (255, 225, 90), 0.30 + 0.38 * fk)
+    dr = ImageDraw.Draw(img)
+    for i in range(9):
+        per = 3.2 + 1.8 * _hash(i, 11)
+        tl = ((t + i * per / 9) % per) / per
+        bx = 950 + 38 * math.sin(tl * 6 + i * 2.3) * (0.4 + 0.6 * _hash(i, 12))
+        by = 1255 - 125 * tl
+        br = (4 + 5 * _hash(i, 13)) * u
+        al = math.sin(math.pi * tl) ** 0.6
+        _add_glow(img, S(bx), by * u, br * 3.2, (255, 235, 150), 0.45 * al)
+        dr.ellipse((S(bx) - br, by * u - br, S(bx) + br, by * u + br), outline=(255, 248, 200), width=max(1, int(2 * u)))
+    for i in range(6):
+        per = 3.8 + 1.5 * _hash(i, 21)
+        tl = ((t + i * per / 6) % per) / per
+        sx = 950 + 26 * math.sin(tl * 7 + i * 1.9)
+        sy = 1000 - 190 * tl
+        al = math.sin(math.pi * tl) ** 0.8
+        _add_glow(img, S(sx), sy * u, S(16), (255, 210, 90), 0.55 * al)
+        _add_glow(img, S(sx), sy * u, S(4), (255, 250, 225), 0.9 * al)
+    # 3) debu cahaya / kunang-kunang
+    for i in range(34):
+        bx = _hash(i, 1) * 1080
+        yb = 1300 - ((_hash(i, 2) * 1100 + t * (9 + 10 * _hash(i, 4))) % 1100)
+        x = (bx + 45 * math.sin(t * 0.45 + i) + t * 5) % 1080
+        tw = 0.5 + 0.5 * math.sin(t * (1.2 + _hash(i, 5)) + i * 1.7)
+        rr = 9 + 9 * _hash(i, 6)
+        _add_glow(img, S(x), S(yb), S(rr), (255, 214, 120), 0.18 + 0.55 * tw)
+        _add_glow(img, S(x), S(yb), S(3), (255, 250, 220), 0.35 + 0.6 * tw)
+
+
 def frame_lab(t, c, segs, total, bg, w, h):
     u = w / 1080
     if not LAYOUTS:
@@ -1328,6 +1462,8 @@ def frame_lab(t, c, segs, total, bg, w, h):
     big = L['big']
     dy = L['slime']['gy'] - 1625
     img = bg.copy()
+    if BG_FX and L.get('behind'):
+        bg_fx(img, t, u)
     d = ImageDraw.Draw(img)
     final = tuple(c["rgb"])
     keys = list(c["paint_keys"])
